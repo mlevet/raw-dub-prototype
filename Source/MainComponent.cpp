@@ -8,6 +8,8 @@ struct ParamSpec
     std::atomic<float>* param;
     double minV, maxV, step;
 };
+
+constexpr int lengthOptions[4] = { 4, 16, 32, 64 };
 }
 
 MainComponent::MainComponent()
@@ -33,6 +35,23 @@ MainComponent::MainComponent()
     addAndMakeVisible (tempoLabel);
     tempoLabel.attachToComponent (&tempoSlider, true);
 
+    addAndMakeVisible (saveButton);
+    saveButton.onClick = [this] { RawDub::ProjectIO::save (engine); };
+
+    addAndMakeVisible (loadButton);
+    loadButton.onClick = [this]
+    {
+        if (RawDub::ProjectIO::load (engine))
+        {
+            kickViewPage = 0;
+            bassViewPage = 0;
+            tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
+            refreshParamSlidersFromEngine();
+            refreshStepColours();
+            resized();
+        }
+    };
+
     // --- prototype-only accent style switcher ---
     addAndMakeVisible (accentStyleLabel);
     for (auto* btn : { &accentStyleAButton, &accentStyleBButton, &accentStyleCButton })
@@ -45,18 +64,49 @@ MainComponent::MainComponent()
     addAndMakeVisible (kickTriggerButton);
     kickTriggerButton.onClick = [this] { engine.requestManualKickTrigger(); };
 
+    addAndMakeVisible (kickClearButton);
+    kickClearButton.onClick = [this]
+    {
+        engine.kickPattern.clearAll();
+        refreshStepColours();
+    };
+
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         auto& btn = kickStepButtons[(size_t) s];
         addAndMakeVisible (btn);
+        // local slot s maps to (kickViewPage*numSteps + s) in the pattern -
+        // read kickViewPage fresh each click, not captured, so it always
+        // reflects whichever page is showing
         btn.onToggle = [this, s]
         {
-            engine.kickPattern.toggle (s);
+            engine.kickPattern.toggle (kickViewPage * RawDub::numSteps + s);
             refreshStepColours();
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
-            engine.kickPattern.setLevel (s, lvl);
+            engine.kickPattern.setLevel (kickViewPage * RawDub::numSteps + s, lvl);
+        };
+    }
+
+    addAndMakeVisible (kickLengthLabel);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& btn = kickLengthButtons[(size_t) i];
+        btn.setButtonText (juce::String (lengthOptions[i]));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, i] { setVoiceLength (engine.kickPattern, lengthOptions[i], kickViewPage); };
+    }
+
+    for (int p = 0; p < maxPages; ++p)
+    {
+        auto& btn = kickPageButtons[(size_t) p];
+        btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, p]
+        {
+            kickViewPage = p;
+            refreshStepColours();
         };
     }
 
@@ -94,14 +144,18 @@ MainComponent::MainComponent()
     addAndMakeVisible (bassTriggerButton);
     bassTriggerButton.onClick = [this] { engine.requestManualBassTrigger(); };
 
+    addAndMakeVisible (bassClearButton);
+    bassClearButton.onClick = [this]
+    {
+        engine.bassPattern.clearAll();
+        refreshStepColours();
+    };
+
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         auto& btn = bassStepButtons[(size_t) s];
         btn.setHasPitch (true);
         addAndMakeVisible (btn);
-        // local slot s always maps to (bassViewPage*numSteps + s) in the
-        // underlying 64-step pattern - read bassViewPage fresh each click,
-        // not captured, so it always reflects whichever page is showing
         btn.onToggle = [this, s]
         {
             engine.bassPattern.toggle (bassViewPage * RawDub::numSteps + s);
@@ -117,7 +171,16 @@ MainComponent::MainComponent()
         };
     }
 
-    for (int p = 0; p < (int) bassPageButtons.size(); ++p)
+    addAndMakeVisible (bassLengthLabel);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& btn = bassLengthButtons[(size_t) i];
+        btn.setButtonText (juce::String (lengthOptions[i]));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, i] { setVoiceLength (engine.bassPattern, lengthOptions[i], bassViewPage); };
+    }
+
+    for (int p = 0; p < maxPages; ++p)
     {
         auto& btn = bassPageButtons[(size_t) p];
         btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
@@ -134,13 +197,15 @@ MainComponent::MainComponent()
 
     {
         // ordered to match the signal chain: oscillator (Tune) -> Drive
-        // (saturation) -> filter (Cutoff/Resonance) -> envelope (Decay)
+        // (saturation) -> filter (Cutoff/Resonance) -> envelope (Length).
+        // Length is hold time, not release speed - the release itself is
+        // a short fixed internal tail (see BassSynth::releaseTau).
         ParamSpec specs[5] = {
             { "Tune",      &engine.bass.tuneHz,    30.0,  120.0,  1.0  },
             { "Drive",     &engine.bass.drive,     0.0,   1.0,    0.01 },
             { "Cutoff",    &engine.bass.cutoffHz,  100.0, 4000.0, 10.0 },
             { "Resonance", &engine.bass.resonance, 0.0,   0.95,   0.01 },
-            { "Decay",     &engine.bass.decayMs,   50.0,  1000.0, 1.0  },
+            { "Length",    &engine.bass.decayMs,   50.0,  4000.0, 10.0 },
         };
 
         for (int i = 0; i < 5; ++i)
@@ -166,7 +231,7 @@ MainComponent::MainComponent()
     updatePlayButtonText();
 
     setAudioChannels (0, 2);
-    setSize (820, 954);
+    setSize (820, 1040);
     startTimerHz (30);
 }
 
@@ -198,6 +263,26 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (juce::Colours::white);
 }
 
+void MainComponent::layoutStepRow (juce::Rectangle<int> stepRow, std::array<RawDub::StepButton, RawDub::numSteps>& buttons,
+                                    int activeLength, int viewPage)
+{
+    int stepsOnThisPage = juce::jlimit (0, RawDub::numSteps, activeLength - viewPage * RawDub::numSteps);
+    int stepWidth = stepsOnThisPage > 0 ? stepRow.getWidth() / stepsOnThisPage : 0;
+
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        if (s < stepsOnThisPage)
+        {
+            buttons[(size_t) s].setVisible (true);
+            buttons[(size_t) s].setBounds (stepRow.removeFromLeft (stepWidth).reduced (2));
+        }
+        else
+        {
+            buttons[(size_t) s].setVisible (false);
+        }
+    }
+}
+
 void MainComponent::resized()
 {
     auto area = getLocalBounds().reduced (16);
@@ -206,6 +291,10 @@ void MainComponent::resized()
     playStopButton.setBounds (transport.removeFromLeft (90));
     transport.removeFromLeft (100); // space for the tempo label
     tempoSlider.setBounds (transport.removeFromLeft (280));
+    transport.removeFromLeft (20);
+    saveButton.setBounds (transport.removeFromLeft (70));
+    transport.removeFromLeft (6);
+    loadButton.setBounds (transport.removeFromLeft (70));
 
     area.removeFromTop (12);
 
@@ -223,13 +312,31 @@ void MainComponent::resized()
     auto kickHeader = area.removeFromTop (28);
     kickTitleLabel.setBounds (kickHeader.removeFromLeft (200));
     kickTriggerButton.setBounds (kickHeader.removeFromLeft (90));
+    kickHeader.removeFromLeft (6);
+    kickClearButton.setBounds (kickHeader.removeFromLeft (70));
+
+    area.removeFromTop (8);
+
+    auto kickLengthRow = area.removeFromTop (28);
+    kickLengthLabel.setBounds (kickLengthRow.removeFromLeft (60));
+    for (auto& btn : kickLengthButtons)
+    {
+        btn.setBounds (kickLengthRow.removeFromLeft (44));
+        kickLengthRow.removeFromLeft (6);
+    }
+    kickLengthRow.removeFromLeft (20);
+    int kickNumPages = (engine.kickPattern.getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    for (int p = 0; p < maxPages; ++p)
+    {
+        kickPageButtons[(size_t) p].setVisible (p < kickNumPages && kickNumPages > 1);
+        kickPageButtons[(size_t) p].setBounds (kickLengthRow.removeFromLeft (64));
+        kickLengthRow.removeFromLeft (6);
+    }
 
     area.removeFromTop (8);
 
     auto kickStepRow = area.removeFromTop (50);
-    const int kickStepWidth = kickStepRow.getWidth() / RawDub::numSteps;
-    for (int s = 0; s < RawDub::numSteps; ++s)
-        kickStepButtons[(size_t) s].setBounds (kickStepRow.removeFromLeft (kickStepWidth).reduced (2));
+    layoutStepRow (kickStepRow, kickStepButtons, engine.kickPattern.getActiveLength(), kickViewPage);
 
     area.removeFromTop (10);
 
@@ -247,11 +354,25 @@ void MainComponent::resized()
     auto bassHeader = area.removeFromTop (28);
     bassTitleLabel.setBounds (bassHeader.removeFromLeft (200));
     bassTriggerButton.setBounds (bassHeader.removeFromLeft (90));
-    bassHeader.removeFromLeft (20);
-    for (auto& btn : bassPageButtons)
+    bassHeader.removeFromLeft (6);
+    bassClearButton.setBounds (bassHeader.removeFromLeft (70));
+
+    area.removeFromTop (8);
+
+    auto bassLengthRow = area.removeFromTop (28);
+    bassLengthLabel.setBounds (bassLengthRow.removeFromLeft (60));
+    for (auto& btn : bassLengthButtons)
     {
-        btn.setBounds (bassHeader.removeFromLeft (64));
-        bassHeader.removeFromLeft (6);
+        btn.setBounds (bassLengthRow.removeFromLeft (44));
+        bassLengthRow.removeFromLeft (6);
+    }
+    bassLengthRow.removeFromLeft (20);
+    int bassNumPages = (engine.bassPattern.getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    for (int p = 0; p < maxPages; ++p)
+    {
+        bassPageButtons[(size_t) p].setVisible (p < bassNumPages && bassNumPages > 1);
+        bassPageButtons[(size_t) p].setBounds (bassLengthRow.removeFromLeft (64));
+        bassLengthRow.removeFromLeft (6);
     }
 
     area.removeFromTop (8);
@@ -261,9 +382,7 @@ void MainComponent::resized()
     // 160px gives ~6px/semitone across the +/-12 range, enough to actually
     // read a contour.
     auto bassStepRow = area.removeFromTop (160);
-    const int bassStepWidth = bassStepRow.getWidth() / RawDub::numSteps;
-    for (int s = 0; s < RawDub::numSteps; ++s)
-        bassStepButtons[(size_t) s].setBounds (bassStepRow.removeFromLeft (bassStepWidth).reduced (2));
+    layoutStepRow (bassStepRow, bassStepButtons, engine.bassPattern.getActiveLength(), bassViewPage);
 
     area.removeFromTop (10);
 
@@ -293,14 +412,26 @@ void MainComponent::timerCallback()
 
 void MainComponent::refreshStepColours()
 {
+    int kickLength = engine.kickPattern.getActiveLength();
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
-        auto& kickBtn = kickStepButtons[(size_t) s];
-        kickBtn.setOn (engine.kickPattern.isOn (s));
-        kickBtn.setLevel (engine.kickPattern.getLevel (s));
-        kickBtn.setPlayhead (s == kickPlayheadStep);
+        int kickIndex = kickViewPage * RawDub::numSteps + s;
+        if (kickIndex >= kickLength)
+            continue;
 
+        auto& kickBtn = kickStepButtons[(size_t) s];
+        kickBtn.setOn (engine.kickPattern.isOn (kickIndex));
+        kickBtn.setLevel (engine.kickPattern.getLevel (kickIndex));
+        kickBtn.setPlayhead (kickIndex == kickPlayheadStep);
+    }
+
+    int bassLength = engine.bassPattern.getActiveLength();
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
         int bassIndex = bassViewPage * RawDub::numSteps + s;
+        if (bassIndex >= bassLength)
+            continue;
+
         auto& bassBtn = bassStepButtons[(size_t) s];
         bassBtn.setOn (engine.bassPattern.isOn (bassIndex));
         bassBtn.setLevel (engine.bassPattern.getLevel (bassIndex));
@@ -311,20 +442,43 @@ void MainComponent::refreshStepColours()
     // page buttons: black = the page you're viewing/editing, grey = the
     // page currently playing (if different) - same black/white/grey
     // language used everywhere else, just applied to page selection
-    int playingPage = bassPlayheadStep >= 0 ? bassPlayheadStep / RawDub::numSteps : -1;
-    for (int p = 0; p < (int) bassPageButtons.size(); ++p)
+    auto refreshPageButtons = [] (std::array<juce::TextButton, MainComponent::maxPages>& pageButtons,
+                                   int viewPage, int playheadStep)
     {
-        auto colour = juce::Colours::white;
-        if (p == bassViewPage)
-            colour = juce::Colours::black;
-        else if (p == playingPage)
-            colour = juce::Colours::lightgrey;
+        int playingPage = playheadStep >= 0 ? playheadStep / RawDub::numSteps : -1;
+        for (int p = 0; p < (int) pageButtons.size(); ++p)
+        {
+            auto colour = juce::Colours::white;
+            if (p == viewPage)
+                colour = juce::Colours::black;
+            else if (p == playingPage)
+                colour = juce::Colours::lightgrey;
 
-        auto textColour = (p == bassViewPage) ? juce::Colours::white : juce::Colours::black;
+            auto textColour = (p == viewPage) ? juce::Colours::white : juce::Colours::black;
 
-        bassPageButtons[(size_t) p].setColour (juce::TextButton::buttonColourId, colour);
-        bassPageButtons[(size_t) p].setColour (juce::TextButton::textColourOffId, textColour);
-    }
+            pageButtons[(size_t) p].setColour (juce::TextButton::buttonColourId, colour);
+            pageButtons[(size_t) p].setColour (juce::TextButton::textColourOffId, textColour);
+        }
+    };
+
+    refreshPageButtons (kickPageButtons, kickViewPage, kickPlayheadStep);
+    refreshPageButtons (bassPageButtons, bassViewPage, bassPlayheadStep);
+
+    // length buttons: black = the length currently active for that voice -
+    // same convention as page buttons, so you can tell each voice's
+    // length at a glance instead of inferring it from the step row
+    auto refreshLengthButtons = [] (std::array<juce::TextButton, 4>& lengthButtons, int activeLength)
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            bool isActive = (lengthOptions[i] == activeLength);
+            lengthButtons[(size_t) i].setColour (juce::TextButton::buttonColourId, isActive ? juce::Colours::black : juce::Colours::white);
+            lengthButtons[(size_t) i].setColour (juce::TextButton::textColourOffId, isActive ? juce::Colours::white : juce::Colours::black);
+        }
+    };
+
+    refreshLengthButtons (kickLengthButtons, engine.kickPattern.getActiveLength());
+    refreshLengthButtons (bassLengthButtons, engine.bassPattern.getActiveLength());
 }
 
 void MainComponent::updatePlayButtonText()
@@ -338,4 +492,28 @@ void MainComponent::setAccentStyle (int style)
         btn.setAccentStyle (style);
     for (auto& btn : bassStepButtons)
         btn.setAccentStyle (style);
+}
+
+// order must match the ParamSpec arrays set up in the constructor -
+// Kick: Tune/Punch/Decay/Drive, Bass: Tune/Drive/Cutoff/Resonance/Length
+void MainComponent::refreshParamSlidersFromEngine()
+{
+    kickParamRows[0].slider.setValue ((double) engine.kick.tuneHz.load(),  juce::dontSendNotification);
+    kickParamRows[1].slider.setValue ((double) engine.kick.punchMs.load(), juce::dontSendNotification);
+    kickParamRows[2].slider.setValue ((double) engine.kick.decayMs.load(), juce::dontSendNotification);
+    kickParamRows[3].slider.setValue ((double) engine.kick.drive.load(),   juce::dontSendNotification);
+
+    bassParamRows[0].slider.setValue ((double) engine.bass.tuneHz.load(),    juce::dontSendNotification);
+    bassParamRows[1].slider.setValue ((double) engine.bass.drive.load(),     juce::dontSendNotification);
+    bassParamRows[2].slider.setValue ((double) engine.bass.cutoffHz.load(),  juce::dontSendNotification);
+    bassParamRows[3].slider.setValue ((double) engine.bass.resonance.load(), juce::dontSendNotification);
+    bassParamRows[4].slider.setValue ((double) engine.bass.decayMs.load(),   juce::dontSendNotification);
+}
+
+void MainComponent::setVoiceLength (RawDub::StepPattern& pattern, int newLength, int& viewPage)
+{
+    pattern.setActiveLength (newLength);
+    viewPage = 0;
+    refreshStepColours();
+    resized();
 }

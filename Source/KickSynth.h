@@ -29,5 +29,15 @@ private:
     double punchTau = 0.02, decayTau = 0.2;
     double driveAmt = 0.0;
     double triggerGain = 1.0;
+
+    // same fix as BassSynth: retriggering while a previous hit is still
+    // decaying used to jump straight to the new hit's value in one
+    // sample - a real risk here since Kick's decay (220ms default) often
+    // has audible amplitude left at the next 16th-note retrigger. Blends
+    // from the old level into the new hit over 2ms instead.
+    static constexpr double declickTau = 0.002;
+    bool declickActive = false;
+    double declickFromLevel = 0.0;
+    double lastOutputSample = 0.0;
 };
 }

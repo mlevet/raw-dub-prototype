@@ -3,6 +3,7 @@
 #include "AudioEngine.h"
 #include "BWLookAndFeel.h"
 #include "StepButton.h"
+#include "ProjectIO.h"
 #include <array>
 
 class MainComponent : public juce::AudioAppComponent, private juce::Timer
@@ -23,6 +24,16 @@ private:
     void refreshStepColours();
     void updatePlayButtonText();
     void setAccentStyle (int style);
+    void refreshParamSlidersFromEngine();
+
+    // shared between Kick and Bass: changing length resets the view to
+    // page 1; resized() recomputes page-button visibility from the new
+    // active length
+    void setVoiceLength (RawDub::StepPattern& pattern, int newLength, int& viewPage);
+    void layoutStepRow (juce::Rectangle<int> stepRow, std::array<RawDub::StepButton, RawDub::numSteps>& buttons,
+                        int activeLength, int viewPage);
+
+    static constexpr int maxPages = RawDub::StepPattern::maxLength / RawDub::numSteps; // 4
 
     RawDub::AudioEngine engine;
     RawDub::BWLookAndFeel lookAndFeel;
@@ -30,6 +41,8 @@ private:
     juce::TextButton playStopButton { "Play" };
     juce::Slider tempoSlider;
     juce::Label  tempoLabel { {}, "Tempo" };
+    juce::TextButton saveButton { "Save" };
+    juce::TextButton loadButton { "Load" };
 
     // prototype-only: comparing accent visual treatments, remove once decided
     juce::Label accentStyleLabel { {}, "Accent style (prototype)" };
@@ -43,20 +56,27 @@ private:
         juce::Slider slider;
     };
 
-    // Kick
+    // Kick - length selectable 4/16/32/64, shown/edited 16 steps per page,
+    // same paging mechanism as Bass.
     juce::TextButton kickTriggerButton { "Trigger" };
+    juce::TextButton kickClearButton { "Clear" };
     std::array<RawDub::StepButton, RawDub::numSteps> kickStepButtons;
     juce::Label kickTitleLabel { {}, "Kick" };
     std::array<ParamRow, 4> kickParamRows;
+    juce::Label kickLengthLabel { {}, "Length" };
+    std::array<juce::TextButton, 4> kickLengthButtons;
+    std::array<juce::TextButton, maxPages> kickPageButtons;
+    int kickViewPage = 0;
 
-    // Bass - 64 steps total (4-bar phrase), shown/edited 16 at a time.
-    // bassStepButtons always represent [bassViewPage*numSteps, +numSteps);
-    // the pattern itself (engine.bassPattern) holds all 64.
+    // Bass - same idea, length selectable 4/16/32/64.
     juce::TextButton bassTriggerButton { "Trigger" };
+    juce::TextButton bassClearButton { "Clear" };
     std::array<RawDub::StepButton, RawDub::numSteps> bassStepButtons;
     juce::Label bassTitleLabel { {}, "Bass" };
     std::array<ParamRow, 5> bassParamRows;
-    std::array<juce::TextButton, RawDub::bassNumSteps / RawDub::numSteps> bassPageButtons;
+    juce::Label bassLengthLabel { {}, "Length" };
+    std::array<juce::TextButton, 4> bassLengthButtons;
+    std::array<juce::TextButton, maxPages> bassPageButtons;
     int bassViewPage = 0;
 
     int kickPlayheadStep = -1;

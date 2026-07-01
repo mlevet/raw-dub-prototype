@@ -25,11 +25,13 @@ public:
     void setTempoBpm (double bpm);
     double getTempoBpm() const { return tempoBpm.load(); }
 
-    // Kick and Bass share one clock but loop at their own pattern length -
-    // Kick every 16 steps, Bass every 64 - so a 4-bar bassline can play
-    // against a 1-bar kick loop.
-    int getCurrentKickStep() const { return globalStepAtomic.load() % numSteps; }
-    int getCurrentBassStep() const { return globalStepAtomic.load() % bassNumSteps; }
+    // Kick and Bass share one clock but loop at their own (independently
+    // user-selectable, 4/16/32/64) pattern length - e.g. a 4-bar bassline
+    // can play against a 1-bar kick loop. Since all valid lengths are
+    // powers of two within {4,16,32,64}, the shorter one always divides
+    // evenly into the longer one, so they never drift out of phase.
+    int getCurrentKickStep() const { return globalStepAtomic.load() % kickPattern.getActiveLength(); }
+    int getCurrentBassStep() const { return globalStepAtomic.load() % bassPattern.getActiveLength(); }
 
     KickSynth kick;
     BassSynth bass;

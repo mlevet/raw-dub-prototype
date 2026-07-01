@@ -10,6 +10,16 @@ void KickSynth::prepare (double newSampleRate)
 
 void KickSynth::trigger (int semitoneOffset, float levelGain)
 {
+    if (active)
+    {
+        declickActive = true;
+        declickFromLevel = lastOutputSample;
+    }
+    else
+    {
+        declickActive = false;
+    }
+
     active = true;
     phase = 0.0;
     t = 0.0;
@@ -47,7 +57,21 @@ void KickSynth::renderAdd (float* out, int numSamples)
             sample = std::tanh (sample * k) / std::tanh (k);
         }
 
+        if (declickActive)
+        {
+            if (t < declickTau)
+            {
+                double blend = t / declickTau;
+                sample = declickFromLevel * (1.0 - blend) + sample * blend;
+            }
+            else
+            {
+                declickActive = false;
+            }
+        }
+
         out[i] += (float) sample;
+        lastOutputSample = sample;
 
         t += dt;
         if (ampEnv < 0.001)

@@ -1,0 +1,101 @@
+RAW DUB PROTOTYPE - RECENT CHANGES
+Everything below is uncommitted work since the last commit
+(fa74f21, "64-step Bass phrases via a 4-page editor").
+=======================================================================
+
+1. BASS ENVELOPE - FROM "TRIGGERED SYNTH" TO "HELD NOTE"
+-----------------------------------------------------------------------
+A sequence of small, isolated experiments driven entirely by listening
+reports against two reference tracks (Iration Steppas vs D. Rootical -
+"Way Down In A Babylon"; Fish & Goat At The Controls - "Dub Warming").
+
+- Attack/hold/release envelope: BassSynth's envelope changed from a
+  pure exponential decay (always fading from the moment a note starts)
+  to attack -> flat hold -> short release. The "Decay" knob was
+  renamed "Length" and repurposed: it now controls how long the note
+  holds at full, stable level (default 2000ms, range 50-4000ms), not
+  how fast it fades. The actual release is a short, fixed, internal
+  100ms tail - not user-facing - so a note that does reach the end of
+  its hold ends cleanly instead of slowly dying.
+- Smooth attack curve: the attack stage changed from a linear ramp to
+  a raised-cosine (S-curve) ramp, so it meets the flat hold with no
+  corner - tests whether removing that discontinuity makes the attack
+  read as "already there" rather than "triggered."
+
+2. FOUNDATION / CHARACTER OSCILLATOR SPLIT
+-----------------------------------------------------------------------
+One phase accumulator, two reads from it:
+- Foundation: a pure sine read from the same phase, untouched by
+  Drive or the filter. Carries the low-end weight, eases in slightly
+  slower (12ms attack vs Character's 3ms).
+- Character: the existing saw -> Drive -> lowpass chain, unchanged.
+  Defines the note, provides harmonic identity.
+Both share the same hold/release timing. Mixed at fixed internal
+levels (foundationLevel 0.65, characterLevel 0.7 - not exposed).
+Existing knobs (Tune/Drive/Cutoff/Resonance/Length) keep their exact
+meaning; they now scope to Character specifically, and Foundation
+only reads Tune and the shared envelope timing. No new UI.
+
+Listening result: heavier, but "too dead" - lacked the reference
+tracks' "air pushing" feeling. Two purely-additive, non-interacting
+layers read as disconnected rather than as one body.
+
+3. SHARED "GLUE" SATURATION
+-----------------------------------------------------------------------
+In response to (2)'s result: a single gentle tanh saturation stage
+applied to the SUM of Foundation + Character (not to either layer
+separately, and much gentler than Character's own internal Drive).
+Lets the two layers intermodulate slightly instead of being purely
+linearly summed - the hypothesis being that real physical low end
+doesn't reproduce two signals independently, it saturates them
+together. Report on this experiment still pending.
+
+4. GHOST NOTES / CLEAR BUTTONS
+-----------------------------------------------------------------------
+Bug: notes left active on non-visible pages of a multi-page pattern
+kept triggering during playback even when the currently-viewed page
+looked empty - AudioEngine checks the full pattern every cycle
+regardless of which page the UI happens to be showing. Fixed by
+adding a "Clear" button per voice (StepPattern::clearAll()) that
+wipes every step across all pages in one click. Added for both Bass
+and Kick, since Kick can now also span multiple pages (see below).
+
+5. VARIABLE PATTERN LENGTH (4 / 16 / 32 / 64)
+-----------------------------------------------------------------------
+Both Kick and Bass can now independently be set to a 4, 16, 32, or
+64-step pattern, not fixed lengths.
+
+- StepPattern always allocates 64 steps of storage internally
+  regardless of the current active length (StepPattern::maxLength),
+  so shrinking a pattern and growing it back never loses step data -
+  it's just outside the active loop meanwhile. setActiveLength() /
+  getActiveLength() control what's actually live.
+- AudioEngine's clock: kick and bass still share one step counter:
+  cycle length is whichever pattern is currently longer, and since
+  4/16/32/64 are all powers of two, the shorter one always divides
+  the longer one evenly, so any combination stays in phase (e.g. a
+  4-step kick against a 32-step bassline).
+- UI: the paging mechanism originally built for Bass only (page
+  buttons like "1-16", "17-32") is now shared by Kick too via
+  MainComponent::setVoiceLength() / layoutStepRow(). Page buttons
+  only appear when a voice's active length needs more than one page
+  - at length 4 or 16 there's nothing to page through, so the row
+  stays hidden. The step row itself shows exactly as many buttons as
+  the current page has active steps (e.g. only 4, wider, buttons at
+  length 4) rather than padding to a fixed 16.
+- Added a Length button row (4/16/32/64) per voice, with the
+  currently active length highlighted black - same visual convention
+  already used for page selection - so each voice's length is
+  visible at a glance instead of having to infer it from the step
+  row.
+
+FILES TOUCHED
+-----------------------------------------------------------------------
+Source/BassSynth.h / .cpp   - envelope rework, Foundation/Character
+                                split, glue saturation
+Source/StepPattern.h        - always-64-slot storage, activeLength
+Source/AudioEngine.h / .cpp - dynamic per-voice cycle length in the
+                                shared clock
+Source/MainComponent.h / .cpp - generalized paging (Kick + Bass),
+                                Length selector, Clear buttons,
+                                active-length highlight

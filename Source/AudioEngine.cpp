@@ -4,7 +4,7 @@
 namespace RawDub
 {
 AudioEngine::AudioEngine()
-    : kickPattern (numSteps), bassPattern (bassNumSteps)
+    : kickPattern (numSteps), bassPattern (StepPattern::maxLength)
 {
 }
 
@@ -32,16 +32,20 @@ double AudioEngine::samplesPerStep() const
 
 void AudioEngine::advanceStep()
 {
-    globalStep = (globalStep + 1) % bassNumSteps;
+    // cycle length is whichever pattern is currently longer; both lengths
+    // are always powers of two from {4,16,32,64}, so the shorter one
+    // divides the longer one exactly and they stay in phase
+    int cycleLength = juce::jmax (kickPattern.getActiveLength(), bassPattern.getActiveLength());
+    globalStep = (globalStep + 1) % cycleLength;
     globalStepAtomic.store (globalStep);
 
-    int kickStep = globalStep % numSteps;
+    int kickStep = globalStep % kickPattern.getActiveLength();
     if (kickPattern.isOn (kickStep))
         kick.trigger (kickPattern.getSemitoneOffset (kickStep), stepLevelGain (kickPattern.getLevel (kickStep)));
 
-    // globalStep already wraps at bassNumSteps, so it IS the bass step index
-    if (bassPattern.isOn (globalStep))
-        bass.trigger (bassPattern.getSemitoneOffset (globalStep), stepLevelGain (bassPattern.getLevel (globalStep)));
+    int bassStep = globalStep % bassPattern.getActiveLength();
+    if (bassPattern.isOn (bassStep))
+        bass.trigger (bassPattern.getSemitoneOffset (bassStep), stepLevelGain (bassPattern.getLevel (bassStep)));
 }
 
 void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples)

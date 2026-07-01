@@ -30,6 +30,8 @@ target_sources(RawDubPrototype PRIVATE
     Source/Scale.h
     Source/StepButton.h
     Source/StepButton.cpp
+    Source/ProjectIO.h
+    Source/ProjectIO.cpp
     Source/BWLookAndFeel.h
 )
 
