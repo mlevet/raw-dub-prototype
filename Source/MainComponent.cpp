@@ -118,14 +118,17 @@ MainComponent::MainComponent()
     bassTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
     {
-        ParamSpec specs[4] = {
+        // ordered to match the signal chain: oscillator (Tune) -> Drive
+        // (saturation) -> filter (Cutoff/Resonance) -> envelope (Decay)
+        ParamSpec specs[5] = {
             { "Tune",      &engine.bass.tuneHz,    30.0,  120.0,  1.0  },
+            { "Drive",     &engine.bass.drive,     0.0,   1.0,    0.01 },
             { "Cutoff",    &engine.bass.cutoffHz,  100.0, 4000.0, 10.0 },
             { "Resonance", &engine.bass.resonance, 0.0,   0.95,   0.01 },
             { "Decay",     &engine.bass.decayMs,   50.0,  1000.0, 1.0  },
         };
 
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 5; ++i)
         {
             auto& row = bassParamRows[(size_t) i];
 
@@ -148,7 +151,7 @@ MainComponent::MainComponent()
     updatePlayButtonText();
 
     setAudioChannels (0, 2);
-    setSize (820, 800);
+    setSize (820, 954);
     startTimerHz (30);
 }
 
@@ -232,7 +235,11 @@ void MainComponent::resized()
 
     area.removeFromTop (8);
 
-    auto bassStepRow = area.removeFromTop (50);
+    // Bass needs real vertical room: it's the only voice with pitch, and at
+    // 50px (Kick's height) each semitone gets under 2px - indistinguishable.
+    // 160px gives ~6px/semitone across the +/-12 range, enough to actually
+    // read a contour.
+    auto bassStepRow = area.removeFromTop (160);
     const int bassStepWidth = bassStepRow.getWidth() / RawDub::numSteps;
     for (int s = 0; s < RawDub::numSteps; ++s)
         bassStepButtons[(size_t) s].setBounds (bassStepRow.removeFromLeft (bassStepWidth).reduced (2));

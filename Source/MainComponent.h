@@ -53,7 +53,7 @@ private:
     juce::TextButton bassTriggerButton { "Trigger" };
     std::array<RawDub::StepButton, RawDub::numSteps> bassStepButtons;
     juce::Label bassTitleLabel { {}, "Bass" };
-    std::array<ParamRow, 4> bassParamRows;
+    std::array<ParamRow, 5> bassParamRows;
 
     int playheadStep = -1;
 

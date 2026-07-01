@@ -27,6 +27,7 @@ target_sources(RawDubPrototype PRIVATE
     Source/BassSynth.cpp
     Source/StepPattern.h
     Source/StepLevel.h
+    Source/Scale.h
     Source/StepButton.h
     Source/StepButton.cpp
     Source/BWLookAndFeel.h

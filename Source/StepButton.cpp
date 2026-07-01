@@ -1,4 +1,5 @@
 #include "StepButton.h"
+#include "Scale.h"
 
 namespace RawDub
 {
@@ -154,7 +155,8 @@ void StepButton::mouseDrag (const juce::MouseEvent& e)
     if (draggingVertical)
     {
         int deltaSemitones = deltaY / pixelsPerSemitone;
-        int newOffset = juce::jlimit (-12, 12, dragStartOffset + deltaSemitones);
+        int rawOffset = juce::jlimit (-12, 12, dragStartOffset + deltaSemitones);
+        int newOffset = nearestScaleDegreeOffset (rawOffset);
 
         if (newOffset != semitoneOffset)
         {
