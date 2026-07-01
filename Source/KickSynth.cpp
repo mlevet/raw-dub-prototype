@@ -1,0 +1,59 @@
+#include "KickSynth.h"
+#include <cmath>
+
+namespace RawDub
+{
+void KickSynth::prepare (double newSampleRate)
+{
+    sampleRate = newSampleRate;
+}
+
+void KickSynth::trigger()
+{
+    active = true;
+    phase = 0.0;
+    t = 0.0;
+    startFreq = (double) tuneHz.load();
+    endFreq = startFreq * 0.5;
+    punchTau = juce::jmax (0.001, (double) punchMs.load() / 1000.0);
+    decayTau = juce::jmax (0.005, (double) decayMs.load() / 1000.0);
+    driveAmt = (double) drive.load();
+}
+
+void KickSynth::renderAdd (float* out, int numSamples)
+{
+    if (! active)
+        return;
+
+    const double dt = 1.0 / sampleRate;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        double pitchEnv = std::exp (-t / punchTau);
+        double freq = endFreq + (startFreq - endFreq) * pitchEnv;
+
+        phase += freq * dt;
+        if (phase >= 1.0)
+            phase -= 1.0;
+
+        double s = std::sin (2.0 * juce::MathConstants<double>::pi * phase);
+        double ampEnv = std::exp (-t / decayTau);
+        double sample = s * ampEnv;
+
+        if (driveAmt > 0.0001)
+        {
+            double k = 1.0 + driveAmt * 6.0;
+            sample = std::tanh (sample * k) / std::tanh (k);
+        }
+
+        out[i] += (float) sample;
+
+        t += dt;
+        if (ampEnv < 0.001)
+        {
+            active = false;
+            break;
+        }
+    }
+}
+}
