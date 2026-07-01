@@ -23,6 +23,12 @@ target_sources(RawDubPrototype PRIVATE
     Source/AudioEngine.cpp
     Source/KickSynth.h
     Source/KickSynth.cpp
+    Source/BassSynth.h
+    Source/BassSynth.cpp
+    Source/StepPattern.h
+    Source/StepLevel.h
+    Source/StepButton.h
+    Source/StepButton.cpp
     Source/BWLookAndFeel.h
 )
 

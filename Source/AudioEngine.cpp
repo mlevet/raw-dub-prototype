@@ -7,6 +7,7 @@ void AudioEngine::prepare (double newSampleRate, int)
 {
     sampleRate = newSampleRate;
     kick.prepare (sampleRate);
+    bass.prepare (sampleRate);
 }
 
 void AudioEngine::play() { pendingCommand.store (TransportCmd::Play); }
@@ -29,8 +30,11 @@ void AudioEngine::advanceStep()
     currentStep = (currentStep + 1) % numSteps;
     currentStepAtomic.store (currentStep);
 
-    if (kickSteps[(size_t) currentStep].load (std::memory_order_relaxed))
-        kick.trigger();
+    if (kickPattern.isOn (currentStep))
+        kick.trigger (kickPattern.getSemitoneOffset (currentStep), stepLevelGain (kickPattern.getLevel (currentStep)));
+
+    if (bassPattern.isOn (currentStep))
+        bass.trigger (bassPattern.getSemitoneOffset (currentStep), stepLevelGain (bassPattern.getLevel (currentStep)));
 }
 
 void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples)
@@ -55,8 +59,11 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
         samplePositionInStep = 0.0;
     }
 
-    if (manualTriggerRequested.exchange (false))
-        kick.trigger();
+    if (manualKickTriggerRequested.exchange (false))
+        kick.trigger (0, stepLevelGain (StepLevel::Normal));
+
+    if (manualBassTriggerRequested.exchange (false))
+        bass.trigger (0, stepLevelGain (StepLevel::Normal));
 
     auto* out = buffer.getWritePointer (0);
 
@@ -72,6 +79,7 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
             int chunk = juce::jmin (remaining, samplesUntilNextStep);
 
             kick.renderAdd (out + offset, chunk);
+            bass.renderAdd (out + offset, chunk);
 
             samplePositionInStep += chunk;
             offset += chunk;
@@ -90,6 +98,7 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
     {
         // let a manually-triggered hit ring out even while the transport is stopped
         kick.renderAdd (out, numSamples);
+        bass.renderAdd (out, numSamples);
     }
 
     for (int i = 0; i < numSamples; ++i)

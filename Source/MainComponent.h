@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "AudioEngine.h"
 #include "BWLookAndFeel.h"
+#include "StepButton.h"
 #include <array>
 
 class MainComponent : public juce::AudioAppComponent, private juce::Timer
@@ -21,18 +22,20 @@ private:
     void timerCallback() override;
     void refreshStepColours();
     void updatePlayButtonText();
+    void setAccentStyle (int style);
 
     RawDub::AudioEngine engine;
     RawDub::BWLookAndFeel lookAndFeel;
 
     juce::TextButton playStopButton { "Play" };
-    juce::TextButton triggerButton  { "Trigger" };
     juce::Slider tempoSlider;
     juce::Label  tempoLabel { {}, "Tempo" };
 
-    std::array<juce::TextButton, RawDub::numSteps> stepButtons;
-
-    juce::Label titleLabel { {}, "Kick" };
+    // prototype-only: comparing accent visual treatments, remove once decided
+    juce::Label accentStyleLabel { {}, "Accent style (prototype)" };
+    juce::TextButton accentStyleAButton { "A" };
+    juce::TextButton accentStyleBButton { "B" };
+    juce::TextButton accentStyleCButton { "C" };
 
     struct ParamRow
     {
@@ -40,7 +43,17 @@ private:
         juce::Slider slider;
     };
 
-    std::array<ParamRow, 4> paramRows;
+    // Kick
+    juce::TextButton kickTriggerButton { "Trigger" };
+    std::array<RawDub::StepButton, RawDub::numSteps> kickStepButtons;
+    juce::Label kickTitleLabel { {}, "Kick" };
+    std::array<ParamRow, 4> kickParamRows;
+
+    // Bass
+    juce::TextButton bassTriggerButton { "Trigger" };
+    std::array<RawDub::StepButton, RawDub::numSteps> bassStepButtons;
+    juce::Label bassTitleLabel { {}, "Bass" };
+    std::array<ParamRow, 4> bassParamRows;
 
     int playheadStep = -1;
 

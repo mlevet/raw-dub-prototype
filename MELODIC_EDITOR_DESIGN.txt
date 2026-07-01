@@ -1,0 +1,174 @@
+RAW DUB PROTOTYPE - MELODIC EDITOR DESIGN
+A deliberate design pause before implementing further pitch editing
+=======================================================================
+
+CONTEXT
+-----------------------------------------------------------------------
+The prototype currently has a uniform Step model (hit, level, pitch),
+Ghost/Normal/Accent levels, per-step pitch on Bass, and a consistent
+click-to-activate / drag-to-edit interaction language.
+
+Before extending pitch editing further, we paused to ask a more
+fundamental question: this instrument will not only contain drums
+(Kick, Snare, Hat). It will centrally contain melodic and harmonic
+instruments - Bass, Skank, Bubble, Chords, Lead, FX synth. Those are
+not secondary. So the real question is not "how do we edit pitch" but:
+
+    How do we compose melodies and harmony in a compact, immediate
+    way that stays true to the instrument's philosophy?
+
+The goal is a MELODIC EDITOR (not a "Bass editor") that eventually
+serves Bass, Skank, Bubble, Lead, and FX synth with one shared
+philosophy - the same way the step grid already serves Kick/Snare/Hat
+with one shared philosophy.
+
+WHY THE KORG SQ-1 IS READABLE
+-----------------------------------------------------------------------
+Studied not to copy, but to extract the underlying principle. The
+SQ-1's readability comes from three things happening at once:
+
+1. Pitch is a literal spatial/analog quantity (knob position), not a
+   digit or note name.
+2. The whole phrase is visible at once - no scrolling, no paging.
+3. Because of (1) and (2), shape recognition happens BEFORE conscious
+   reading - you see a melody rise and fall the way you see a
+   mountain range, not the way you read a sentence.
+
+Any melodic editor design that breaks one of these three properties
+loses the thing that makes it work.
+
+TWO ADDITIONAL DESIGN PRINCIPLES (confirmed after review)
+-----------------------------------------------------------------------
+  - The musician should be able to recognise a phrase from across the
+    room. Meant literally: zoomed out, a melody should have a shape,
+    the way you can recognise a waveform without reading it.
+  - The editor should be learnable without a manual. Put another
+    musician in front of it for ten minutes; they should discover how
+    to write a bassline on their own. If it needs an explanation,
+    it's too clever. This is the same standard that makes early
+    Fruity Loops and the SQ-1 approachable despite not being
+    feature-poor - the interaction matches the musician's mental
+    model well enough that no manual is needed.
+
+THREE INTERACTION MODELS CONSIDERED
+-----------------------------------------------------------------------
+
+1. SCALE-LOCKED BAR GRID (refinement of what's already built)
+   -------------------------------------------------------------------
+   Same bar-per-step, drag-to-set-height language as today, but
+   height snaps to SCALE DEGREES within the song's Key, not raw
+   chromatic semitones. Fill weight still carries Ghost/Normal/Accent
+   exactly as already designed.
+
+   Why scale-locking matters: chromatic pitch gives 24+ possible bar
+   heights that all look similar, so the silhouette reads as noise.
+   Diatonic pitch gives ~7 heights per octave, so two bars either
+   match or don't - the eye can actually compare them. This is SQ-1
+   properties #1 and #3.
+
+   Framing matters here: this is not "you can't play wrong notes" -
+   that reads as a toy. It's "the instrument encourages coherent
+   melodies" - a genre-appropriate constraint, not a limitation
+   apologised for. Raw Dub should feel opinionated, not childproofed.
+   One track, one key, very little modulation is the musical reality
+   of dub, not an arbitrary software restriction - a global Key is
+   close to a property of the genre.
+
+   Harmony extension: the chord ROOT uses this exact same bar -
+   literally the same gesture, same visual language as Bass. Chord
+   QUALITY (major/minor/7th/sus) defaults automatically from the
+   scale degree via ordinary diatonic harmony (i minor, iv minor, V
+   major, etc., depending on the Key). Most of the time you only ever
+   set the root, and quality is correct by construction - "expose
+   musical concepts, not MIDI events" taken seriously.
+
+   The override must NOT be buried as an "advanced option" - dub
+   producers do deliberately reach for minor/major/sus/7 for their
+   colour, not by accident. One click on an already-placed root should
+   cycle its quality (e.g. Fm -> F7 -> Fsus -> Fmaj -> Fm...). Default
+   is automatic and correct; override is one click away, not hidden.
+
+   Cost: requires a new small global concept - a single song KEY
+   (e.g. "F minor"). Treated as a feature, not overhead: one global
+   constant that simultaneously makes melody readable AND harmony
+   musical is a strong signal it's the right abstraction.
+
+   Evaluation against philosophy:
+     immediate               - yes, near-zero change from current gesture
+     compact                 - yes, same footprint as today's step row
+     no menu diving           - yes
+     visually readable        - strong (clean bar-chart silhouette)
+     encourages musical thinking - strong (coherent melodies by
+                                  construction, quality inferred from
+                                  real harmony, one-click to override)
+     not a traditional DAW    - yes
+     years of evolution       - strong (same bar language extends to
+                                  Lead/Bubble/FX; Harmony reuses it for root)
+
+2. DISCRETE PITCH-LANE GRID ("false piano roll," scale degrees as rows)
+   -------------------------------------------------------------------
+   Instead of one bar whose height varies, render a fixed small grid
+   - one row per scale degree across ~1.5 octaves - and a step lights
+   up the exact row it occupies. The melody is literally connect-the-
+   dots across steps, which is even more direct than inferring it
+   from bar height.
+
+   Evaluation: probably the single most legible option in isolation -
+   closer to actually SEEING the pitch than inferring it. But it
+   fails compactness and long-term evolution: once Bass, Skank,
+   Bubble, and Lead all want their own lane visible at once, that's
+   four 10-row grids stacked - a piano roll wearing a costume. Also
+   drifts furthest toward "traditional DAW" of the three options,
+   even though the underlying data is just as scale-locked as option 1.
+
+3. FREEHAND CONTOUR DRAW (pencil the whole phrase's shape in one gesture)
+   -------------------------------------------------------------------
+   Drag once across all 16 steps like painting an automation curve;
+   each step snaps to the nearest scale degree as the pointer crosses
+   it. Potentially the fastest way to sketch "rises then falls."
+
+   Evaluation: compact and readable exactly like option 1 (same bar
+   rendering), but the INTERACTION itself is automation-lane behavior
+   borrowed from a DAW. Risks encouraging gestural doodling over the
+   deliberate, one-decision-per-step thinking the rest of the
+   instrument is built around - closer to the instrument composing
+   for you than you composing on it. Does not unify with Harmony at
+   all (can't freehand-draw a sequence of chord qualities), so it
+   would live outside the "one family, one philosophy" goal rather
+   than inside it. Worth keeping in mind as a possible LATER
+   power-gesture layered on top of option 1, not as a foundation.
+
+RECOMMENDATION
+-----------------------------------------------------------------------
+Option 1 - Scale-locked bar grid.
+
+Reasons:
+  - Smallest change from what already exists (scale-quantize the bar
+    height already built for Bass).
+  - The only option with a real, non-bolted-on answer for Harmony.
+  - The only option that stays compact once four melodic voices need
+    to coexist on screen at once.
+  - Its one real cost - a global song Key - is arguably wanted
+    independently of this decision, since a dub track lives in one
+    key for its entire duration; this isn't a UI convenience, it's
+    true of the genre.
+
+OPEN SUB-PROBLEMS (deliberately left unsolved for now)
+-----------------------------------------------------------------------
+  - Octave range: how a bar is represented when it wants to go beyond
+    the visible lane height. Explicitly NOT to be designed speculatively
+    - do not invent octave switching yet. Wait until real basslines
+    have actually been written (ten or so) and let the need reveal
+    what feels natural, rather than guessing ahead of use.
+  - How and where the Key gets set - this itself needs "musical
+    language, not software language" treatment, not a dropdown of
+    note names and mode names.
+  - The exact gesture for the chord-quality override. Decided: it
+    must be one click on the root, not buried as an advanced option
+    (see Chord quality section above). Not yet decided: the precise
+    interaction mechanics of that click/cycle.
+
+These are intentionally not solved in this document. The point of
+this design pause was to settle the MODEL, not the pixel-level
+interaction - that's the next design session, once this direction is
+confirmed.

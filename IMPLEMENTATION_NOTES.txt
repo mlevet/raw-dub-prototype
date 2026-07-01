@@ -1,0 +1,143 @@
+RAW DUB PROTOTYPE - KICK-ONLY HARNESS
+What was built and how it works
+=======================================================================
+
+1. REPO & BUILD SYSTEM
+-----------------------------------------------------------------------
+- New git repo, independent from DDD1MidiHub, pushed to
+  github.com/mlevet/raw-dub-prototype.
+- CMakeLists.txt points add_subdirectory(../DDD1BassTranslator/JUCE JUCE)
+  - reuses the JUCE checkout already on disk instead of re-cloning it,
+  same trick DDD1MidiHub uses.
+- Uses juce_add_gui_app, NOT juce_add_plugin ... FORMATS Standalone.
+  DDD1MidiHub is built as a plugin wrapped in a Standalone shell
+  (AudioProcessor/AudioProcessorEditor). Raw Dub has no plugin
+  ambitions right now, so it's a plain JUCE app built on
+  AudioAppComponent, which owns the AudioDeviceManager directly -
+  fewer moving parts, no processor/editor split to maintain.
+- C++17, arm64, matching the other two projects' toolchain.
+
+2. WHAT'S ACTUALLY IMPLEMENTED (deliberately just the kick)
+-----------------------------------------------------------------------
+Five source files:
+
+- KickSynth.h/.cpp    - the synth itself, no JUCE audio-graph
+                         machinery, just a plain class with
+                         prepare(), trigger(), renderAdd().
+- AudioEngine.h/.cpp   - transport, clock, one 16-step pattern
+                         (currently only driving the kick).
+- MainComponent.h/.cpp - the window contents: transport bar, step
+                         row, four parameter sliders.
+- BWLookAndFeel.h      - a LookAndFeel_V4 subclass that recolors
+                         everything black/white and overrides
+                         drawButtonBackground to draw flat rectangles
+                         with a black outline instead of JUCE's
+                         default rounded/gradient buttons.
+- Main.cpp             - standard JUCEApplication + DocumentWindow
+                         boilerplate that hosts MainComponent.
+
+3. KICK DSP - KickSynth::renderAdd
+-----------------------------------------------------------------------
+Per sample, while a hit is active:
+
+1. Pitch envelope: pitchEnv = exp(-t / punchTau), an exponential
+   decay from 1 to 0. Frequency at time t is:
+     freq = endFreq + (startFreq - endFreq) * pitchEnv
+   where startFreq = the Tune knob and endFreq = startFreq * 0.5
+   (fixed ratio, not exposed). punchTau is Punch in seconds - short
+   Punch = the pitch drop happens fast (click), long Punch = it
+   lingers (boom).
+
+2. Oscillator: a phase accumulator (phase += freq/sampleRate)
+   driving sin(2*pi*phase) - plain sine, no wavetable.
+
+3. Amp envelope: ampEnv = exp(-t / decayTau), Decay knob sets the
+   time constant.
+
+4. Drive: if Drive > 0, sample = tanh(sample*k) / tanh(k) where
+   k = 1 + drive*6 - a normalized tanh saturator, so increasing
+   Drive adds harmonic saturation without the peak level jumping
+   around.
+
+5. The loop exits early (active = false; break;) once
+   ampEnv < 0.001, so a decayed voice costs ~0 CPU on later blocks.
+
+trigger() reads the four std::atomic<float> params once, at
+hit-start, into local doubles - so a slider move takes effect on the
+NEXT hit, not mid-decay. That's a deliberate simplification, not an
+oversight.
+
+4. TRANSPORT & CONCURRENCY - AudioEngine
+-----------------------------------------------------------------------
+This is the part worth being precise about, because it's a real-time
+audio callback racing against the GUI thread.
+
+- Clock: samplesPerStep() = sampleRate / (tempoBpm/60 * 4) - 16th
+  notes. renderNextBlock walks the audio buffer in chunks bounded by
+  the next step boundary, calls kick.renderAdd() per chunk, and
+  calls advanceStep() exactly on the boundary - sample-accurate, not
+  rounded to block size.
+
+- Play/Stop is not applied directly. play()/stop(), called from the
+  GUI thread (button click), only do pendingCommand.store(Play/Stop).
+  The actual mutation of currentStep and samplePositionInStep
+  happens INSIDE renderNextBlock, i.e. only ever on the audio thread.
+  This avoids a data race on that state without needing a lock - the
+  classic "GUI posts an atomic command, audio thread consumes it"
+  pattern.
+
+- Manual Trigger button works the same way: it sets
+  manualTriggerRequested (atomic bool), and renderNextBlock calls
+  kick.trigger() on the audio thread when it sees that flag. If the
+  trigger button called kick.trigger() straight from the GUI thread,
+  it would race with renderAdd() reading phase/t/active on the audio
+  thread mid-decay - this sidesteps that entirely.
+
+- Step pattern (kickSteps) is std::array<std::atomic<bool>, 16> -
+  toggled from GUI, read from audio thread; single-bool atomics, no
+  lock needed.
+
+- Tempo is a plain std::atomic<double>, read once per block on the
+  audio thread.
+
+- Playhead position (currentStepAtomic) is written by the audio
+  thread, polled by a 30Hz GUI Timer to redraw the step row and
+  Play/Stop button label - so the button label always reflects what
+  the audio thread actually confirmed, not what the GUI
+  optimistically assumed.
+
+- Master output is soft-clipped with tanh(x*0.9) before being
+  duplicated mono to stereo, so nothing hard-clips.
+
+5. UI
+-----------------------------------------------------------------------
+MainComponent lays out: Play/Stop + Trigger + Tempo slider on top,
+16 step buttons in one row (white = off, black = on, grey = current
+playhead position), then a "Kick" label and four horizontal sliders
+(Tune/Punch/Decay/Drive) wired directly to the synth's atomics via
+onValueChange lambdas. No separate voice-selector or per-voice-panel
+abstraction - with one voice there's nothing to select, so that
+wasn't built yet; it's a natural refactor point once Snare/Hat/Bass
+are added.
+
+6. VERIFICATION
+-----------------------------------------------------------------------
+- cmake -S . -B build configured cleanly against the shared JUCE
+  checkout.
+- cmake --build build compiled with no errors (one harmless
+  deprecation warning on juce::Font's old constructor).
+- Launched Raw Dub Prototype.app, confirmed via ps that the process
+  stayed alive after a few seconds (i.e. it didn't crash on
+  audio-device init).
+- Could NOT screenshot it directly - Terminal doesn't have Screen
+  Recording/Accessibility permission granted in System Settings, and
+  that can't be granted programmatically. The actual visual/audio
+  check is on you; only the launch and process survival were
+  confirmed automatically.
+
+7. GITHUB
+-----------------------------------------------------------------------
+gh isn't installed locally, so the repo was created via the GitHub
+web UI. It was then added as "origin", everything except build/
+(gitignored) was staged, committed, and main was pushed with -u to
+set upstream tracking.

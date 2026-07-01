@@ -8,16 +8,17 @@ void KickSynth::prepare (double newSampleRate)
     sampleRate = newSampleRate;
 }
 
-void KickSynth::trigger()
+void KickSynth::trigger (int semitoneOffset, float levelGain)
 {
     active = true;
     phase = 0.0;
     t = 0.0;
-    startFreq = (double) tuneHz.load();
+    startFreq = (double) tuneHz.load() * std::pow (2.0, semitoneOffset / 12.0);
     endFreq = startFreq * 0.5;
     punchTau = juce::jmax (0.001, (double) punchMs.load() / 1000.0);
     decayTau = juce::jmax (0.005, (double) decayMs.load() / 1000.0);
     driveAmt = (double) drive.load();
+    triggerGain = (double) levelGain;
 }
 
 void KickSynth::renderAdd (float* out, int numSamples)
@@ -38,7 +39,7 @@ void KickSynth::renderAdd (float* out, int numSamples)
 
         double s = std::sin (2.0 * juce::MathConstants<double>::pi * phase);
         double ampEnv = std::exp (-t / decayTau);
-        double sample = s * ampEnv;
+        double sample = s * ampEnv * triggerGain;
 
         if (driveAmt > 0.0001)
         {
