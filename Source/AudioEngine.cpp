@@ -3,6 +3,11 @@
 
 namespace RawDub
 {
+AudioEngine::AudioEngine()
+    : kickPattern (numSteps), bassPattern (bassNumSteps)
+{
+}
+
 void AudioEngine::prepare (double newSampleRate, int)
 {
     sampleRate = newSampleRate;
@@ -27,14 +32,16 @@ double AudioEngine::samplesPerStep() const
 
 void AudioEngine::advanceStep()
 {
-    currentStep = (currentStep + 1) % numSteps;
-    currentStepAtomic.store (currentStep);
+    globalStep = (globalStep + 1) % bassNumSteps;
+    globalStepAtomic.store (globalStep);
 
-    if (kickPattern.isOn (currentStep))
-        kick.trigger (kickPattern.getSemitoneOffset (currentStep), stepLevelGain (kickPattern.getLevel (currentStep)));
+    int kickStep = globalStep % numSteps;
+    if (kickPattern.isOn (kickStep))
+        kick.trigger (kickPattern.getSemitoneOffset (kickStep), stepLevelGain (kickPattern.getLevel (kickStep)));
 
-    if (bassPattern.isOn (currentStep))
-        bass.trigger (bassPattern.getSemitoneOffset (currentStep), stepLevelGain (bassPattern.getLevel (currentStep)));
+    // globalStep already wraps at bassNumSteps, so it IS the bass step index
+    if (bassPattern.isOn (globalStep))
+        bass.trigger (bassPattern.getSemitoneOffset (globalStep), stepLevelGain (bassPattern.getLevel (globalStep)));
 }
 
 void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples)
@@ -42,11 +49,11 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
     buffer.clear();
 
     // Transport start/stop is only ever applied here, on the audio thread,
-    // so currentStep / samplePositionInStep never need cross-thread locking.
+    // so globalStep / samplePositionInStep never need cross-thread locking.
     auto cmd = pendingCommand.exchange (TransportCmd::None);
     if (cmd == TransportCmd::Play)
     {
-        currentStep = -1;
+        globalStep = -1;
         samplePositionInStep = 0.0;
         playing.store (true);
         advanceStep();
@@ -54,8 +61,8 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
     else if (cmd == TransportCmd::Stop)
     {
         playing.store (false);
-        currentStep = 0;
-        currentStepAtomic.store (0);
+        globalStep = 0;
+        globalStepAtomic.store (0);
         samplePositionInStep = 0.0;
     }
 

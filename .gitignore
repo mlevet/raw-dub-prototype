@@ -3,3 +3,6 @@ cmake-build-*/
 .DS_Store
 *.xcodeproj/
 .idea/
+*.mp3
+*.wav
+*.aiff

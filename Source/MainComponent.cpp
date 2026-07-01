@@ -99,18 +99,33 @@ MainComponent::MainComponent()
         auto& btn = bassStepButtons[(size_t) s];
         btn.setHasPitch (true);
         addAndMakeVisible (btn);
+        // local slot s always maps to (bassViewPage*numSteps + s) in the
+        // underlying 64-step pattern - read bassViewPage fresh each click,
+        // not captured, so it always reflects whichever page is showing
         btn.onToggle = [this, s]
         {
-            engine.bassPattern.toggle (s);
+            engine.bassPattern.toggle (bassViewPage * RawDub::numSteps + s);
             refreshStepColours();
         };
         btn.onPitchDrag = [this, s] (int offset)
         {
-            engine.bassPattern.setSemitoneOffset (s, offset);
+            engine.bassPattern.setSemitoneOffset (bassViewPage * RawDub::numSteps + s, offset);
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
-            engine.bassPattern.setLevel (s, lvl);
+            engine.bassPattern.setLevel (bassViewPage * RawDub::numSteps + s, lvl);
+        };
+    }
+
+    for (int p = 0; p < (int) bassPageButtons.size(); ++p)
+    {
+        auto& btn = bassPageButtons[(size_t) p];
+        btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, p]
+        {
+            bassViewPage = p;
+            refreshStepColours();
         };
     }
 
@@ -232,6 +247,12 @@ void MainComponent::resized()
     auto bassHeader = area.removeFromTop (28);
     bassTitleLabel.setBounds (bassHeader.removeFromLeft (200));
     bassTriggerButton.setBounds (bassHeader.removeFromLeft (90));
+    bassHeader.removeFromLeft (20);
+    for (auto& btn : bassPageButtons)
+    {
+        btn.setBounds (bassHeader.removeFromLeft (64));
+        bassHeader.removeFromLeft (6);
+    }
 
     area.removeFromTop (8);
 
@@ -259,10 +280,13 @@ void MainComponent::timerCallback()
 {
     updatePlayButtonText();
 
-    int step = engine.isPlaying() ? engine.getCurrentStep() : -1;
-    if (step != playheadStep)
+    int kickStep = engine.isPlaying() ? engine.getCurrentKickStep() : -1;
+    int bassStep = engine.isPlaying() ? engine.getCurrentBassStep() : -1;
+
+    if (kickStep != kickPlayheadStep || bassStep != bassPlayheadStep)
     {
-        playheadStep = step;
+        kickPlayheadStep = kickStep;
+        bassPlayheadStep = bassStep;
         refreshStepColours();
     }
 }
@@ -271,18 +295,35 @@ void MainComponent::refreshStepColours()
 {
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
-        bool isPlayhead = (s == playheadStep);
-
         auto& kickBtn = kickStepButtons[(size_t) s];
         kickBtn.setOn (engine.kickPattern.isOn (s));
         kickBtn.setLevel (engine.kickPattern.getLevel (s));
-        kickBtn.setPlayhead (isPlayhead);
+        kickBtn.setPlayhead (s == kickPlayheadStep);
 
+        int bassIndex = bassViewPage * RawDub::numSteps + s;
         auto& bassBtn = bassStepButtons[(size_t) s];
-        bassBtn.setOn (engine.bassPattern.isOn (s));
-        bassBtn.setLevel (engine.bassPattern.getLevel (s));
-        bassBtn.setSemitoneOffset (engine.bassPattern.getSemitoneOffset (s));
-        bassBtn.setPlayhead (isPlayhead);
+        bassBtn.setOn (engine.bassPattern.isOn (bassIndex));
+        bassBtn.setLevel (engine.bassPattern.getLevel (bassIndex));
+        bassBtn.setSemitoneOffset (engine.bassPattern.getSemitoneOffset (bassIndex));
+        bassBtn.setPlayhead (bassIndex == bassPlayheadStep);
+    }
+
+    // page buttons: black = the page you're viewing/editing, grey = the
+    // page currently playing (if different) - same black/white/grey
+    // language used everywhere else, just applied to page selection
+    int playingPage = bassPlayheadStep >= 0 ? bassPlayheadStep / RawDub::numSteps : -1;
+    for (int p = 0; p < (int) bassPageButtons.size(); ++p)
+    {
+        auto colour = juce::Colours::white;
+        if (p == bassViewPage)
+            colour = juce::Colours::black;
+        else if (p == playingPage)
+            colour = juce::Colours::lightgrey;
+
+        auto textColour = (p == bassViewPage) ? juce::Colours::white : juce::Colours::black;
+
+        bassPageButtons[(size_t) p].setColour (juce::TextButton::buttonColourId, colour);
+        bassPageButtons[(size_t) p].setColour (juce::TextButton::textColourOffId, textColour);
     }
 }
 

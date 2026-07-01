@@ -10,6 +10,8 @@ namespace RawDub
 class AudioEngine
 {
 public:
+    AudioEngine();
+
     void prepare (double sampleRate, int blockSize);
     void renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples);
 
@@ -23,7 +25,11 @@ public:
     void setTempoBpm (double bpm);
     double getTempoBpm() const { return tempoBpm.load(); }
 
-    int getCurrentStep() const { return currentStepAtomic.load(); }
+    // Kick and Bass share one clock but loop at their own pattern length -
+    // Kick every 16 steps, Bass every 64 - so a 4-bar bassline can play
+    // against a 1-bar kick loop.
+    int getCurrentKickStep() const { return globalStepAtomic.load() % numSteps; }
+    int getCurrentBassStep() const { return globalStepAtomic.load() % bassNumSteps; }
 
     KickSynth kick;
     BassSynth bass;
@@ -47,7 +53,7 @@ private:
     // audio-thread-only transport state (mutated exclusively while
     // processing pendingCommand inside renderNextBlock)
     double samplePositionInStep = 0.0;
-    int currentStep = 0;
-    std::atomic<int> currentStepAtomic { 0 };
+    int globalStep = 0;
+    std::atomic<int> globalStepAtomic { 0 };
 };
 }

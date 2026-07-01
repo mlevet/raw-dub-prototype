@@ -49,13 +49,18 @@ private:
     juce::Label kickTitleLabel { {}, "Kick" };
     std::array<ParamRow, 4> kickParamRows;
 
-    // Bass
+    // Bass - 64 steps total (4-bar phrase), shown/edited 16 at a time.
+    // bassStepButtons always represent [bassViewPage*numSteps, +numSteps);
+    // the pattern itself (engine.bassPattern) holds all 64.
     juce::TextButton bassTriggerButton { "Trigger" };
     std::array<RawDub::StepButton, RawDub::numSteps> bassStepButtons;
     juce::Label bassTitleLabel { {}, "Bass" };
     std::array<ParamRow, 5> bassParamRows;
+    std::array<juce::TextButton, RawDub::bassNumSteps / RawDub::numSteps> bassPageButtons;
+    int bassViewPage = 0;
 
-    int playheadStep = -1;
+    int kickPlayheadStep = -1;
+    int bassPlayheadStep = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
