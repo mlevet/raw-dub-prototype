@@ -8,6 +8,19 @@ void BassSynth::prepare (double newSampleRate)
     sampleRate = newSampleRate;
 }
 
+void BassSynth::resetToDefaults()
+{
+    tuneHz.store (55.0f);
+    drive.store (0.15f);
+    cutoffHz.store (1200.0f);
+    resonance.store (0.1f);
+    decayMs.store (2000.0f);
+    useAMMode.store (false);
+    amRatio.store (1.0f);
+    amDepth.store (0.8f);
+    volume.store (1.0f);
+}
+
 void BassSynth::trigger (int semitoneOffset, float levelGain)
 {
     if (active)
@@ -32,6 +45,7 @@ void BassSynth::applyTrigger (int semitoneOffset, float levelGain)
     active = true;
     choking = false;
     phase = 0.0;
+    modPhase = 0.0;
     t = 0.0;
     svfLow = 0.0;
     svfBand = 0.0;
@@ -40,6 +54,9 @@ void BassSynth::applyTrigger (int semitoneOffset, float levelGain)
     holdSeconds = juce::jmax (0.02, (double) decayMs.load() / 1000.0);
     triggerGain = (double) levelGain;
     driveAmt = (double) drive.load();
+    amModeSnapshot = useAMMode.load();
+    amRatioSnapshot = (double) amRatio.load();
+    amDepthSnapshot = (double) amDepth.load();
 
     double cutoff = (double) juce::jlimit (20.0f, (float) (sampleRate * 0.45), cutoffHz.load());
     svfF = 2.0 * std::sin (juce::MathConstants<double>::pi * cutoff / sampleRate);
@@ -54,36 +71,63 @@ void BassSynth::renderAdd (float* out, int numSamples)
         return;
 
     const double dt = 1.0 / sampleRate;
+    // read once per block, not per sample - Volume is a real-time mixing
+    // control (unlike the voicing params, which only take effect on the
+    // next trigger via applyTrigger's snapshots)
+    const double vol = (double) volume.load();
 
     for (int i = 0; i < numSamples; ++i)
     {
-        // One source: a sine, not a mathematically pure one. A perfect
-        // sine has literally nothing for Cutoff/Resonance to shape at low
-        // Drive - no real analog "sine" source is that pure either. A
-        // small, fixed, non-exposed 2nd-harmonic component (sin^2(x) =
-        // 0.5 - 0.5cos(2x)) gives the filter something to act on
-        // regardless of Drive, without adding Drive's own odd-harmonic
-        // (saw/acid-adjacent) character.
-        //
-        // Important: warmth is computed from the pure sine and added
-        // AFTER Drive's tanh stage, not fed into it - keeps the two
-        // fully decoupled (measured: feeding warmth into Drive generates
-        // real intermodulation that read as "digital dirtiness").
         phase += freq * dt;
         if (phase >= 1.0)
             phase -= 1.0;
 
         double osc = std::sin (2.0 * juce::MathConstants<double>::pi * phase);
 
-        double shaped = osc;
-        if (driveAmt > 0.0001)
+        double voiced;
+        if (amModeSnapshot)
         {
-            double k = 1.0 + driveAmt * 12.0;
-            shaped = std::tanh (osc * k) / std::tanh (k);
-        }
+            // Research A/B mode: locked audio-rate amplitude modulation
+            // instead of Drive. Modulator is locked to freq*amRatio (a
+            // small set of simple ratios only - see BassSynth.h) so
+            // sidebands land exactly on harmonics - no detune, no free
+            // rate, no gong/metallic inharmonicity. Bypasses Drive and
+            // the fixed warmth entirely so the two mechanisms are
+            // compared cleanly, never stacked.
+            modPhase += freq * amRatioSnapshot * dt;
+            if (modPhase >= 1.0)
+                modPhase -= 1.0;
 
-        double warmth = osc * osc - 0.5;
-        double voiced = shaped + 0.12 * warmth;
+            double modulator = std::sin (2.0 * juce::MathConstants<double>::pi * modPhase);
+            double amFactor = 1.0 - amDepthSnapshot * 0.5 + amDepthSnapshot * 0.5 * modulator;
+            // fixed makeup gain - see amMakeupGainDb/amMakeupGain in BassSynth.h
+            voiced = osc * amFactor * amMakeupGain;
+        }
+        else
+        {
+            // One source: a sine, not a mathematically pure one. A perfect
+            // sine has literally nothing for Cutoff/Resonance to shape at
+            // low Drive - no real analog "sine" source is that pure
+            // either. A small, fixed, non-exposed 2nd-harmonic component
+            // (sin^2(x) = 0.5 - 0.5cos(2x)) gives the filter something to
+            // act on regardless of Drive, without adding Drive's own
+            // odd-harmonic (saw/acid-adjacent) character.
+            //
+            // Important: warmth is computed from the pure sine and added
+            // AFTER Drive's tanh stage, not fed into it - keeps the two
+            // fully decoupled (measured: feeding warmth into Drive
+            // generates real intermodulation that read as "digital
+            // dirtiness").
+            double shaped = osc;
+            if (driveAmt > 0.0001)
+            {
+                double k = 1.0 + driveAmt * 12.0;
+                shaped = std::tanh (osc * k) / std::tanh (k);
+            }
+
+            double warmth = osc * osc - 0.5;
+            voiced = shaped + 0.12 * warmth;
+        }
 
         double high = voiced - svfLow - svfQ * svfBand;
         svfBand += svfF * high;
@@ -99,7 +143,7 @@ void BassSynth::renderAdd (float* out, int numSamples)
             double envMult = chokeStartAmp * (0.5 + 0.5 * std::cos (juce::MathConstants<double>::pi * blend));
             currentAmpEnv = envMult;
 
-            out[i] += (float) (svfLow * envMult * triggerGain * outputGain);
+            out[i] += (float) (svfLow * envMult * triggerGain * outputGain * vol);
 
             chokeT += dt;
             if (chokeT >= chokeTau)
@@ -141,7 +185,7 @@ void BassSynth::renderAdd (float* out, int numSamples)
         currentAmpEnv = ampEnv;
 
         double sample = svfLow * ampEnv * triggerGain * outputGain;
-        out[i] += (float) sample;
+        out[i] += (float) (sample * vol);
 
         t += dt;
         if (t >= attackTau + holdSeconds + releaseTau)

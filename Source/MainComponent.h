@@ -3,6 +3,7 @@
 #include "AudioEngine.h"
 #include "BWLookAndFeel.h"
 #include "StepButton.h"
+#include "CurveLaneEditor.h"
 #include "ProjectIO.h"
 #include <array>
 
@@ -41,8 +42,16 @@ private:
     juce::TextButton playStopButton { "Play" };
     juce::Slider tempoSlider;
     juce::Label  tempoLabel { {}, "Tempo" };
+    // multi-project: each project is a standalone JSON file, chosen via a
+    // normal file chooser. Save writes to currentProjectFile if one is
+    // already set, else behaves like Save As. currentProjectFile empty =
+    // unsaved new project.
     juce::TextButton saveButton { "Save" };
-    juce::TextButton loadButton { "Load" };
+    juce::TextButton saveAsButton { "Save As..." };
+    juce::TextButton openButton { "Open..." };
+    juce::TextButton newProjectButton { "New" };
+    juce::File currentProjectFile;
+    std::unique_ptr<juce::FileChooser> fileChooser; // must outlive an async chooser dialog
 
     // prototype-only: comparing accent visual treatments, remove once decided
     juce::Label accentStyleLabel { {}, "Accent style (prototype)" };
@@ -62,7 +71,7 @@ private:
     juce::TextButton kickClearButton { "Clear" };
     std::array<RawDub::StepButton, RawDub::numSteps> kickStepButtons;
     juce::Label kickTitleLabel { {}, "Kick" };
-    std::array<ParamRow, 4> kickParamRows;
+    std::array<ParamRow, 5> kickParamRows; // Tune, Punch, Decay, Drive, Volume
     juce::Label kickLengthLabel { {}, "Length" };
     std::array<juce::TextButton, 4> kickLengthButtons;
     std::array<juce::TextButton, maxPages> kickPageButtons;
@@ -73,14 +82,48 @@ private:
     juce::TextButton bassClearButton { "Clear" };
     std::array<RawDub::StepButton, RawDub::numSteps> bassStepButtons;
     juce::Label bassTitleLabel { {}, "Bass" };
-    std::array<ParamRow, 5> bassParamRows;
+    std::array<ParamRow, 7> bassParamRows; // Tune, Drive, Cutoff, Resonance, Length, AM Depth, Volume
     juce::Label bassLengthLabel { {}, "Length" };
     std::array<juce::TextButton, 4> bassLengthButtons;
     std::array<juce::TextButton, maxPages> bassPageButtons;
     int bassViewPage = 0;
 
+    // research switch, not permanent UI - see BassSynth::useAMMode.
+    // Ratio deliberately discrete (not a slider) - only simple integer
+    // ratios keep AM mode harmonic instead of gong-like.
+    juce::TextButton bassHarmonicModeButton { "Harmonic: Drive" };
+    juce::Label bassAmRatioLabel { {}, "AM Ratio" };
+    std::array<juce::TextButton, 3> bassAmRatioButtons; // 1:1, 2:1, 3:1
+
     int kickPlayheadStep = -1;
     int bassPlayheadStep = -1;
+
+    // Skank - now sequenced like Kick/Bass (variable length, paging,
+    // per-step pitch for progressions - see SkankSynth.h). Chord
+    // shape/voicing is deliberately still fixed (Major/Minor triad,
+    // global not per-step) - synthesis is not finished, this is about
+    // judging the instrument in musical context, not a final build.
+    juce::TextButton skankTriggerButton { "Trigger" };
+    juce::TextButton skankClearButton { "Clear" };
+    std::array<RawDub::StepButton, RawDub::numSteps> skankStepButtons;
+    juce::Label skankTitleLabel { {}, "Skank" };
+    juce::TextButton skankMajorButton { "Major" };
+    juce::TextButton skankMinorButton { "Minor" };
+    std::array<ParamRow, 5> skankParamRows; // Tune, SawMix, Decay, Drive, Volume
+    juce::Label skankLengthLabel { {}, "Length" };
+    std::array<juce::TextButton, 4> skankLengthButtons;
+    std::array<juce::TextButton, maxPages> skankPageButtons;
+    int skankViewPage = 0;
+    int skankPlayheadStep = -1;
+
+    // sparse draggable-point SawMix curve - see CurveLaneEditor.h and
+    // SkankSynth's sawMixCurve*  methods. Deliberately scoped to SawMix
+    // only, no generic modulation routing. Moving the SawMix slider
+    // flattens this curve to the slider's value (slider = static state,
+    // curve = animated state - see feedback_raw_dub_experiment_protocol
+    // memory for the general principle).
+    juce::Label skankSawMixLaneLabel { {}, "SawMix Curve" };
+    RawDub::CurveLaneEditor skankSawMixLaneEditor;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

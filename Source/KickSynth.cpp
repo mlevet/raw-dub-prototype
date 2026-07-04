@@ -8,6 +8,15 @@ void KickSynth::prepare (double newSampleRate)
     sampleRate = newSampleRate;
 }
 
+void KickSynth::resetToDefaults()
+{
+    tuneHz.store (60.0f);
+    punchMs.store (40.0f);
+    decayMs.store (220.0f);
+    drive.store (0.2f);
+    volume.store (1.0f);
+}
+
 void KickSynth::trigger (int semitoneOffset, float levelGain)
 {
     if (active)
@@ -37,6 +46,10 @@ void KickSynth::renderAdd (float* out, int numSamples)
         return;
 
     const double dt = 1.0 / sampleRate;
+    // read once per block, not per sample - Volume is a real-time mixing
+    // control (unlike the voicing params, which only take effect on the
+    // next trigger), but per-sample atomic reads would be wasteful
+    const double vol = (double) volume.load();
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -70,7 +83,7 @@ void KickSynth::renderAdd (float* out, int numSamples)
             }
         }
 
-        out[i] += (float) sample;
+        out[i] += (float) (sample * vol);
         lastOutputSample = sample;
 
         t += dt;

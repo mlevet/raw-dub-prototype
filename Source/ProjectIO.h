@@ -4,14 +4,16 @@
 
 namespace RawDub
 {
-// Minimal single-file project save/load - a development/listening tool,
-// not a production feature. One fixed file, no browser, no presets, no
-// arrangement. Goal: build a groove, save it, change synth code, rebuild,
-// reload the same groove, compare honestly.
+// Minimal multi-file project save/load - projects are individual JSON
+// files, chosen via a normal file chooser (Save/Save As/Open/New in
+// MainComponent). No browser, no presets, no arrangement - just enough
+// to branch ideas and come back to them without overwriting anything.
 namespace ProjectIO
 {
-    juce::File getProjectFile();
-    bool save (AudioEngine& engine);
-    bool load (AudioEngine& engine);
+    // legacy fixed location from the single-slot era - kept only so an
+    // existing save there is still found and auto-loaded on first launch
+    juce::File getDefaultProjectFile();
+    bool save (AudioEngine& engine, const juce::File& file);
+    bool load (AudioEngine& engine, const juce::File& file);
 }
 }

@@ -25,11 +25,14 @@ target_sources(RawDubPrototype PRIVATE
     Source/KickSynth.cpp
     Source/BassSynth.h
     Source/BassSynth.cpp
+    Source/SkankSynth.h
+    Source/SkankSynth.cpp
     Source/StepPattern.h
     Source/StepLevel.h
     Source/Scale.h
     Source/StepButton.h
     Source/StepButton.cpp
+    Source/CurveLaneEditor.h
     Source/ProjectIO.h
     Source/ProjectIO.cpp
     Source/BWLookAndFeel.h

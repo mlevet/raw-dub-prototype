@@ -10,6 +10,7 @@ public:
     void prepare (double sampleRate);
     void trigger (int semitoneOffset = 0, float levelGain = 1.0f);
     void renderAdd (float* out, int numSamples);
+    void resetToDefaults(); // for "New Project" - restores every param to its shipped default
 
     // One coherent voice, not two combined: sine oscillator -> saturation
     // -> lowpass -> envelope. Foundation/Character (a second, separately
@@ -35,14 +36,49 @@ public:
     // only when the note is explicitly finished."
     std::atomic<float> decayMs   { 2000.0f };  // hold/length, favour steadiness by default
 
+    // Research switch, NOT a permanent architecture decision - A/B test
+    // between the current Drive (tanh saturation) harmonic engine and
+    // locked audio-rate amplitude modulation. AM mode bypasses Drive and
+    // the fixed warmth entirely so the two mechanisms are compared
+    // cleanly, one at a time, not stacked. See AMExperiment.h/.cpp for
+    // the original isolated version of this test.
+    std::atomic<bool> useAMMode { false };
+
+    // AM mode only. Ratio is deliberately NOT a free Hz value - it must
+    // stay one of a small set of simple integer ratios (1, 2, or 3) so
+    // the modulator's sidebands always land exactly on harmonics of the
+    // fundamental. A free rate was tested in isolation (AMExperiment)
+    // and confirmed to go inharmonic/gong-like off-ratio - "always
+    // musical" here means the UI only ever offers ratios that can't do
+    // that, not a wide-open knob with a "safe zone."
+    std::atomic<float> amRatio { 1.0f };
+    std::atomic<float> amDepth { 0.8f }; // AM mode only, 0-1, safe at any value
+
+    std::atomic<float> volume { 1.0f }; // basic level balancing against Kick, 0-1, applied before the master limiter
+
 private:
+    // Locked 1:1 AM produces an asymmetric waveform - a brief high peak,
+    // then a much quieter negative half-cycle - so at matching PEAK
+    // amplitude it measured ~5dB quieter in RMS/perceived loudness than
+    // Drive mode. Not a mixing choice: a fixed internal correction so
+    // switching Drive<->AM is loudness-matched and the ear judges tone,
+    // not volume. Deliberately NOT exposed as a control - Volume (above)
+    // stays a pure Kick/Bass balance knob, this is a synthesis-mode
+    // correction. If this overshoots headroom/clips against Kick once
+    // actually heard, reduce the dB value here, don't add a UI control.
+    static constexpr double amMakeupGainDb = 5.0;
+    static constexpr double amMakeupGain = 1.7783; // 10^(amMakeupGainDb/20), precomputed to avoid a runtime pow() in the audio callback
     void applyTrigger (int semitoneOffset, float levelGain);
 
     double sampleRate = 44100.0;
     bool active = false;
     double phase = 0.0;
+    double modPhase = 0.0; // AM mode only - locked to phase by amRatio, no independent drift
     double t = 0.0;
     double freq = 55.0;
+    double amRatioSnapshot = 1.0;
+    double amDepthSnapshot = 0.8;
+    bool amModeSnapshot = false; // read once at trigger time, like every other param
     double holdSeconds = 2.0;
     double triggerGain = 1.0;
     double driveAmt = 0.0;

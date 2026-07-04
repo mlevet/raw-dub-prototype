@@ -56,6 +56,10 @@ public:
     {
         for (auto& s : on)
             s.store (false, std::memory_order_relaxed);
+        for (auto& l : levels)
+            l.store ((int) StepLevel::Normal, std::memory_order_relaxed);
+        for (auto& o : offsets)
+            o.store (0, std::memory_order_relaxed);
     }
 
     void setLevel (int step, StepLevel level)

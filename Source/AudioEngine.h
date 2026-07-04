@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "KickSynth.h"
 #include "BassSynth.h"
+#include "SkankSynth.h"
 #include "StepPattern.h"
 #include <atomic>
 
@@ -21,9 +22,16 @@ public:
 
     void requestManualKickTrigger() { manualKickTriggerRequested.store (true); }
     void requestManualBassTrigger() { manualBassTriggerRequested.store (true); }
+    void requestManualSkankTrigger() { manualSkankTriggerRequested.store (true); }
 
     void setTempoBpm (double bpm);
     double getTempoBpm() const { return tempoBpm.load(); }
+
+    // "New Project" - stops transport, resets tempo/patterns/synth params
+    // to their shipped defaults. Mutates existing atomics in place, never
+    // reconstructs the engine, so it's safe to call from the message
+    // thread while the audio thread may be mid-callback.
+    void resetToDefaults();
 
     // Kick and Bass share one clock but loop at their own (independently
     // user-selectable, 4/16/32/64) pattern length - e.g. a 4-bar bassline
@@ -32,12 +40,15 @@ public:
     // evenly into the longer one, so they never drift out of phase.
     int getCurrentKickStep() const { return globalStepAtomic.load() % kickPattern.getActiveLength(); }
     int getCurrentBassStep() const { return globalStepAtomic.load() % bassPattern.getActiveLength(); }
+    int getCurrentSkankStep() const { return globalStepAtomic.load() % skankPattern.getActiveLength(); }
 
     KickSynth kick;
     BassSynth bass;
+    SkankSynth skank;
 
     StepPattern kickPattern;
     StepPattern bassPattern;
+    StepPattern skankPattern;
 
 private:
     enum class TransportCmd { None, Play, Stop };
@@ -51,6 +62,7 @@ private:
     std::atomic<TransportCmd> pendingCommand { TransportCmd::None };
     std::atomic<bool> manualKickTriggerRequested { false };
     std::atomic<bool> manualBassTriggerRequested { false };
+    std::atomic<bool> manualSkankTriggerRequested { false };
 
     // audio-thread-only transport state (mutated exclusively while
     // processing pendingCommand inside renderNextBlock)

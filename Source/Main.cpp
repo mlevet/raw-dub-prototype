@@ -23,8 +23,18 @@ public:
             : DocumentWindow (name, juce::Colours::white, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent(), true);
-            centreWithSize (getWidth(), getHeight());
+
+            // The instrument list keeps growing (Kick/Bass/AM/Skank...),
+            // so the content is taller than most screens can show in one
+            // fixed window. Scroll instead of resizing the window every
+            // time - content keeps its own natural size, the window
+            // stays a reasonable, screen-safe fixed size.
+            auto* viewport = new juce::Viewport();
+            viewport->setViewedComponent (new MainComponent(), true);
+            viewport->setScrollBarsShown (true, false);
+
+            setContentOwned (viewport, true);
+            centreWithSize (860, 950);
             setResizable (true, false);
             setVisible (true);
         }

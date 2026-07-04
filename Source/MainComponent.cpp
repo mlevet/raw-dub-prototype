@@ -35,21 +35,95 @@ MainComponent::MainComponent()
     addAndMakeVisible (tempoLabel);
     tempoLabel.attachToComponent (&tempoSlider, true);
 
-    addAndMakeVisible (saveButton);
-    saveButton.onClick = [this] { RawDub::ProjectIO::save (engine); };
-
-    addAndMakeVisible (loadButton);
-    loadButton.onClick = [this]
+    // an existing single-slot save from before multi-project support -
+    // auto-load it so nothing already on disk is silently lost, and treat
+    // it as the starting "current file" so a plain Save still works
     {
-        if (RawDub::ProjectIO::load (engine))
-        {
-            kickViewPage = 0;
-            bassViewPage = 0;
-            tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
-            refreshParamSlidersFromEngine();
-            refreshStepColours();
-            resized();
-        }
+        auto legacyFile = RawDub::ProjectIO::getDefaultProjectFile();
+        if (legacyFile.existsAsFile() && RawDub::ProjectIO::load (engine, legacyFile))
+            currentProjectFile = legacyFile;
+    }
+
+    addAndMakeVisible (saveButton);
+    saveButton.onClick = [this]
+    {
+        if (currentProjectFile != juce::File())
+            RawDub::ProjectIO::save (engine, currentProjectFile);
+        else
+            saveAsButton.triggerClick();
+    };
+
+    addAndMakeVisible (saveAsButton);
+    saveAsButton.onClick = [this]
+    {
+        auto initial = currentProjectFile != juce::File()
+                           ? currentProjectFile
+                           : RawDub::ProjectIO::getDefaultProjectFile().getParentDirectory().getChildFile ("Untitled.json");
+
+        fileChooser = std::make_unique<juce::FileChooser> ("Save Project As...", initial, "*.json");
+        fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto file = fc.getResult();
+                if (file == juce::File())
+                    return;
+                if (! file.hasFileExtension ("json"))
+                    file = file.withFileExtension ("json");
+
+                if (RawDub::ProjectIO::save (engine, file))
+                    currentProjectFile = file;
+            });
+    };
+
+    addAndMakeVisible (openButton);
+    openButton.onClick = [this]
+    {
+        auto initial = currentProjectFile != juce::File() ? currentProjectFile : RawDub::ProjectIO::getDefaultProjectFile();
+
+        fileChooser = std::make_unique<juce::FileChooser> ("Open Project...", initial, "*.json");
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [this] (const juce::FileChooser& fc)
+            {
+                auto file = fc.getResult();
+                if (file == juce::File())
+                    return;
+
+                if (RawDub::ProjectIO::load (engine, file))
+                {
+                    currentProjectFile = file;
+                    kickViewPage = 0;
+                    bassViewPage = 0;
+                    skankViewPage = 0;
+                    tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
+                    refreshParamSlidersFromEngine();
+                    refreshStepColours();
+                    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern.getActiveLength());
+                    resized();
+                }
+            });
+    };
+
+    addAndMakeVisible (newProjectButton);
+    newProjectButton.onClick = [this]
+    {
+        juce::NativeMessageBox::showOkCancelBox (juce::AlertWindow::WarningIcon, "New Project",
+            "Start a new project? Unsaved changes will be lost.", this,
+            juce::ModalCallbackFunction::create ([this] (int result)
+            {
+                if (result == 0)
+                    return;
+
+                engine.resetToDefaults();
+                currentProjectFile = juce::File();
+                kickViewPage = 0;
+                bassViewPage = 0;
+                skankViewPage = 0;
+                tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
+                refreshParamSlidersFromEngine();
+                refreshStepColours();
+                skankSawMixLaneEditor.setGridDivisions (engine.skankPattern.getActiveLength());
+                resized();
+            }));
     };
 
     // --- prototype-only accent style switcher ---
@@ -114,14 +188,15 @@ MainComponent::MainComponent()
     kickTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
     {
-        ParamSpec specs[4] = {
-            { "Tune",  &engine.kick.tuneHz,  30.0, 150.0, 1.0  },
-            { "Punch", &engine.kick.punchMs, 5.0,  120.0, 1.0  },
-            { "Decay", &engine.kick.decayMs, 50.0, 800.0, 1.0  },
-            { "Drive", &engine.kick.drive,   0.0,  1.0,   0.01 },
+        ParamSpec specs[5] = {
+            { "Tune",   &engine.kick.tuneHz,  30.0, 150.0, 1.0  },
+            { "Punch",  &engine.kick.punchMs, 5.0,  120.0, 1.0  },
+            { "Decay",  &engine.kick.decayMs, 50.0, 800.0, 1.0  },
+            { "Drive",  &engine.kick.drive,   0.0,  1.0,   0.01 },
+            { "Volume", &engine.kick.volume,  0.0,  1.0,   0.01 },
         };
 
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 5; ++i)
         {
             auto& row = kickParamRows[(size_t) i];
 
@@ -195,20 +270,52 @@ MainComponent::MainComponent()
     addAndMakeVisible (bassTitleLabel);
     bassTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
+    addAndMakeVisible (bassHarmonicModeButton);
+    bassHarmonicModeButton.onClick = [this]
+    {
+        bool nowAM = ! engine.bass.useAMMode.load();
+        engine.bass.useAMMode.store (nowAM);
+        bassHarmonicModeButton.setButtonText (nowAM ? "Harmonic: AM" : "Harmonic: Drive");
+    };
+
+    addAndMakeVisible (bassAmRatioLabel);
+
+    {
+        const char* ratioLabels[3] = { "1:1", "2:1", "3:1" };
+        const float ratioValues[3] = { 1.0f, 2.0f, 3.0f };
+
+        for (int i = 0; i < 3; ++i)
+        {
+            auto& b = bassAmRatioButtons[(size_t) i];
+            addAndMakeVisible (b);
+            b.setButtonText (ratioLabels[i]);
+            b.setClickingTogglesState (true);
+            b.setRadioGroupId (5001);
+            b.setToggleState (i == 0, juce::dontSendNotification);
+
+            float value = ratioValues[i];
+            b.onClick = [this, value] { engine.bass.amRatio.store (value); };
+        }
+    }
+
     {
         // ordered to match the signal chain: oscillator (Tune) -> Drive
         // (saturation) -> filter (Cutoff/Resonance) -> envelope (Length).
         // Length is hold time, not release speed - the release itself is
-        // a short fixed internal tail (see BassSynth::releaseTau).
-        ParamSpec specs[5] = {
+        // a short fixed internal tail (see BassSynth::releaseTau). AM
+        // Depth only matters in AM mode (research switch, see
+        // BassSynth::useAMMode) - harmless when Drive mode is active.
+        ParamSpec specs[7] = {
             { "Tune",      &engine.bass.tuneHz,    30.0,  120.0,  1.0  },
             { "Drive",     &engine.bass.drive,     0.0,   1.0,    0.01 },
             { "Cutoff",    &engine.bass.cutoffHz,  100.0, 4000.0, 10.0 },
             { "Resonance", &engine.bass.resonance, 0.0,   0.95,   0.01 },
             { "Length",    &engine.bass.decayMs,   50.0,  4000.0, 10.0 },
+            { "AM Depth",  &engine.bass.amDepth,   0.0,   1.0,    0.01 },
+            { "Volume",    &engine.bass.volume,    0.0,   1.0,    0.01 },
         };
 
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < 7; ++i)
         {
             auto& row = bassParamRows[(size_t) i];
 
@@ -227,11 +334,134 @@ MainComponent::MainComponent()
         }
     }
 
+    // --- Skank (sequenced, see SkankSynth.h) ---
+    addAndMakeVisible (skankTitleLabel);
+    skankTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
+
+    addAndMakeVisible (skankTriggerButton);
+    skankTriggerButton.onClick = [this] { engine.requestManualSkankTrigger(); };
+
+    addAndMakeVisible (skankClearButton);
+    skankClearButton.onClick = [this]
+    {
+        engine.skankPattern.clearAll();
+        engine.skank.resetSawMixLane();
+        refreshStepColours();
+        skankSawMixLaneEditor.repaint();
+    };
+
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        auto& btn = skankStepButtons[(size_t) s];
+        btn.setHasPitch (true); // transposes the whole chord's root - see SkankSynth::triggerChord
+        addAndMakeVisible (btn);
+        btn.onToggle = [this, s]
+        {
+            engine.skankPattern.toggle (skankViewPage * RawDub::numSteps + s);
+            refreshStepColours();
+        };
+        btn.onPitchDrag = [this, s] (int offset)
+        {
+            engine.skankPattern.setSemitoneOffset (skankViewPage * RawDub::numSteps + s, offset);
+        };
+        btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
+        {
+            engine.skankPattern.setLevel (skankViewPage * RawDub::numSteps + s, lvl);
+        };
+    }
+
+    addAndMakeVisible (skankLengthLabel);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& btn = skankLengthButtons[(size_t) i];
+        btn.setButtonText (juce::String (lengthOptions[i]));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, i]
+        {
+            setVoiceLength (engine.skankPattern, lengthOptions[i], skankViewPage);
+            skankSawMixLaneEditor.setGridDivisions (lengthOptions[i]);
+        };
+    }
+
+    for (int p = 0; p < maxPages; ++p)
+    {
+        auto& btn = skankPageButtons[(size_t) p];
+        btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, p]
+        {
+            skankViewPage = p;
+            refreshStepColours();
+        };
+    }
+
+    addAndMakeVisible (skankMajorButton);
+    addAndMakeVisible (skankMinorButton);
+    skankMajorButton.setClickingTogglesState (true);
+    skankMinorButton.setClickingTogglesState (true);
+    skankMajorButton.setRadioGroupId (6001);
+    skankMinorButton.setRadioGroupId (6001);
+    skankMajorButton.setToggleState (true, juce::dontSendNotification);
+    skankMajorButton.onClick = [this] { engine.skank.minorChord.store (false); };
+    skankMinorButton.onClick = [this] { engine.skank.minorChord.store (true); };
+
+    {
+        ParamSpec specs[5] = {
+            { "Tune",    &engine.skank.tuneHz,  200.0, 800.0, 1.0  },
+            { "SawMix",  &engine.skank.sawMix,  0.0,   1.0,   0.01 },
+            { "Decay",   &engine.skank.decayMs, 30.0,  500.0, 1.0  },
+            { "Drive",   &engine.skank.drive,   0.0,   1.0,   0.01 },
+            { "Volume",  &engine.skank.volume,  0.0,   1.0,   0.01 },
+        };
+
+        for (int i = 0; i < 5; ++i)
+        {
+            auto& row = skankParamRows[(size_t) i];
+
+            addAndMakeVisible (row.label);
+            row.label.setText (specs[i].name, juce::dontSendNotification);
+
+            addAndMakeVisible (row.slider);
+            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+            row.slider.setRange (specs[i].minV, specs[i].maxV, specs[i].step);
+            row.slider.setValue ((double) specs[i].param->load(), juce::dontSendNotification);
+
+            auto* param = specs[i].param;
+            auto* slider = &row.slider;
+            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
+        }
+
+        // SawMix specifically: the slider is "set a constant," the curve
+        // is "compose evolution" - never two independent ways of
+        // controlling the same thing. Moving the slider collapses the
+        // curve back to a flat line at the slider's value; see
+        // SkankSynth::resetSawMixLaneToValue.
+        skankParamRows[1].slider.onValueChange = [this]
+        {
+            float v = (float) skankParamRows[1].slider.getValue();
+            engine.skank.sawMix.store (v);
+            engine.skank.resetSawMixLaneToValue (v);
+            skankSawMixLaneEditor.repaint();
+        };
+    }
+
+    addAndMakeVisible (skankSawMixLaneLabel);
+    addAndMakeVisible (skankSawMixLaneEditor);
+    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern.getActiveLength());
+    skankSawMixLaneEditor.getPointCount = [this] { return engine.skank.getSawMixCurvePointCount(); };
+    skankSawMixLaneEditor.getPointPosition = [this] (int i) { return engine.skank.getSawMixCurvePointPosition (i); };
+    skankSawMixLaneEditor.getPointValue = [this] (int i) { return engine.skank.getSawMixCurvePointValue (i); };
+    skankSawMixLaneEditor.onPointValueChanged = [this] (int i, float v) { engine.skank.setSawMixCurvePointValue (i, v); };
+    skankSawMixLaneEditor.onPointPositionChanged = [this] (int i, float p) { engine.skank.setSawMixCurvePointPosition (i, p); };
+    skankSawMixLaneEditor.onAddPoint = [this] (float p, float v) { return engine.skank.insertSawMixCurvePoint (p, v); };
+    skankSawMixLaneEditor.onRemovePoint = [this] (int i) { engine.skank.removeSawMixCurvePoint (i); };
+
     refreshStepColours();
     updatePlayButtonText();
 
     setAudioChannels (0, 2);
-    setSize (820, 1040);
+    setSize (820, 1950);
     startTimerHz (30);
 }
 
@@ -290,11 +520,15 @@ void MainComponent::resized()
     auto transport = area.removeFromTop (44);
     playStopButton.setBounds (transport.removeFromLeft (90));
     transport.removeFromLeft (100); // space for the tempo label
-    tempoSlider.setBounds (transport.removeFromLeft (280));
-    transport.removeFromLeft (20);
-    saveButton.setBounds (transport.removeFromLeft (70));
-    transport.removeFromLeft (6);
-    loadButton.setBounds (transport.removeFromLeft (70));
+    tempoSlider.setBounds (transport.removeFromLeft (260));
+    transport.removeFromLeft (16);
+    saveButton.setBounds (transport.removeFromLeft (55));
+    transport.removeFromLeft (4);
+    saveAsButton.setBounds (transport.removeFromLeft (85));
+    transport.removeFromLeft (4);
+    openButton.setBounds (transport.removeFromLeft (70));
+    transport.removeFromLeft (4);
+    newProjectButton.setBounds (transport.removeFromLeft (55));
 
     area.removeFromTop (12);
 
@@ -356,6 +590,8 @@ void MainComponent::resized()
     bassTriggerButton.setBounds (bassHeader.removeFromLeft (90));
     bassHeader.removeFromLeft (6);
     bassClearButton.setBounds (bassHeader.removeFromLeft (70));
+    bassHeader.removeFromLeft (6);
+    bassHarmonicModeButton.setBounds (bassHeader.removeFromLeft (120));
 
     area.removeFromTop (8);
 
@@ -377,6 +613,16 @@ void MainComponent::resized()
 
     area.removeFromTop (8);
 
+    auto bassAmRatioRow = area.removeFromTop (28);
+    bassAmRatioLabel.setBounds (bassAmRatioRow.removeFromLeft (70));
+    for (auto& btn : bassAmRatioButtons)
+    {
+        btn.setBounds (bassAmRatioRow.removeFromLeft (50));
+        bassAmRatioRow.removeFromLeft (6);
+    }
+
+    area.removeFromTop (8);
+
     // Bass needs real vertical room: it's the only voice with pitch, and at
     // 50px (Kick's height) each semitone gets under 2px - indistinguishable.
     // 160px gives ~6px/semitone across the +/-12 range, enough to actually
@@ -393,6 +639,60 @@ void MainComponent::resized()
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
+
+    area.removeFromTop (24);
+
+    // --- Skank ---
+    auto skankHeader = area.removeFromTop (28);
+    skankTitleLabel.setBounds (skankHeader.removeFromLeft (150));
+    skankTriggerButton.setBounds (skankHeader.removeFromLeft (90));
+    skankHeader.removeFromLeft (6);
+    skankClearButton.setBounds (skankHeader.removeFromLeft (70));
+
+    area.removeFromTop (8);
+
+    auto skankLengthRow = area.removeFromTop (28);
+    skankLengthLabel.setBounds (skankLengthRow.removeFromLeft (60));
+    for (auto& btn : skankLengthButtons)
+    {
+        btn.setBounds (skankLengthRow.removeFromLeft (44));
+        skankLengthRow.removeFromLeft (6);
+    }
+    skankLengthRow.removeFromLeft (20);
+    int skankNumPages = (engine.skankPattern.getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    for (int p = 0; p < maxPages; ++p)
+    {
+        skankPageButtons[(size_t) p].setVisible (p < skankNumPages && skankNumPages > 1);
+        skankPageButtons[(size_t) p].setBounds (skankLengthRow.removeFromLeft (64));
+        skankLengthRow.removeFromLeft (6);
+    }
+
+    area.removeFromTop (8);
+
+    auto skankStepRow = area.removeFromTop (120);
+    layoutStepRow (skankStepRow, skankStepButtons, engine.skankPattern.getActiveLength(), skankViewPage);
+
+    area.removeFromTop (10);
+
+    auto skankChordRow = area.removeFromTop (28);
+    skankMajorButton.setBounds (skankChordRow.removeFromLeft (70));
+    skankChordRow.removeFromLeft (6);
+    skankMinorButton.setBounds (skankChordRow.removeFromLeft (70));
+
+    area.removeFromTop (8);
+
+    for (auto& row : skankParamRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (70));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+    }
+
+    area.removeFromTop (8);
+    skankSawMixLaneLabel.setBounds (area.removeFromTop (20));
+    area.removeFromTop (4);
+    skankSawMixLaneEditor.setBounds (area.removeFromTop (70));
 }
 
 void MainComponent::timerCallback()
@@ -401,11 +701,13 @@ void MainComponent::timerCallback()
 
     int kickStep = engine.isPlaying() ? engine.getCurrentKickStep() : -1;
     int bassStep = engine.isPlaying() ? engine.getCurrentBassStep() : -1;
+    int skankStep = engine.isPlaying() ? engine.getCurrentSkankStep() : -1;
 
-    if (kickStep != kickPlayheadStep || bassStep != bassPlayheadStep)
+    if (kickStep != kickPlayheadStep || bassStep != bassPlayheadStep || skankStep != skankPlayheadStep)
     {
         kickPlayheadStep = kickStep;
         bassPlayheadStep = bassStep;
+        skankPlayheadStep = skankStep;
         refreshStepColours();
     }
 }
@@ -439,6 +741,22 @@ void MainComponent::refreshStepColours()
         bassBtn.setPlayhead (bassIndex == bassPlayheadStep);
     }
 
+    int skankLength = engine.skankPattern.getActiveLength();
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        int skankIndex = skankViewPage * RawDub::numSteps + s;
+        if (skankIndex >= skankLength)
+            continue;
+
+        auto& skankBtn = skankStepButtons[(size_t) s];
+        skankBtn.setOn (engine.skankPattern.isOn (skankIndex));
+        skankBtn.setLevel (engine.skankPattern.getLevel (skankIndex));
+        skankBtn.setSemitoneOffset (engine.skankPattern.getSemitoneOffset (skankIndex));
+        skankBtn.setPlayhead (skankIndex == skankPlayheadStep);
+    }
+
+    skankSawMixLaneEditor.setPlayheadStep (skankPlayheadStep);
+
     // page buttons: black = the page you're viewing/editing, grey = the
     // page currently playing (if different) - same black/white/grey
     // language used everywhere else, just applied to page selection
@@ -463,6 +781,7 @@ void MainComponent::refreshStepColours()
 
     refreshPageButtons (kickPageButtons, kickViewPage, kickPlayheadStep);
     refreshPageButtons (bassPageButtons, bassViewPage, bassPlayheadStep);
+    refreshPageButtons (skankPageButtons, skankViewPage, skankPlayheadStep);
 
     // length buttons: black = the length currently active for that voice -
     // same convention as page buttons, so you can tell each voice's
@@ -479,6 +798,7 @@ void MainComponent::refreshStepColours()
 
     refreshLengthButtons (kickLengthButtons, engine.kickPattern.getActiveLength());
     refreshLengthButtons (bassLengthButtons, engine.bassPattern.getActiveLength());
+    refreshLengthButtons (skankLengthButtons, engine.skankPattern.getActiveLength());
 }
 
 void MainComponent::updatePlayButtonText()
@@ -492,22 +812,44 @@ void MainComponent::setAccentStyle (int style)
         btn.setAccentStyle (style);
     for (auto& btn : bassStepButtons)
         btn.setAccentStyle (style);
+    for (auto& btn : skankStepButtons)
+        btn.setAccentStyle (style);
 }
 
 // order must match the ParamSpec arrays set up in the constructor -
-// Kick: Tune/Punch/Decay/Drive, Bass: Tune/Drive/Cutoff/Resonance/Length
+// Kick: Tune/Punch/Decay/Drive/Volume, Bass: Tune/Drive/Cutoff/Resonance/Length/AM Depth/Volume
 void MainComponent::refreshParamSlidersFromEngine()
 {
     kickParamRows[0].slider.setValue ((double) engine.kick.tuneHz.load(),  juce::dontSendNotification);
     kickParamRows[1].slider.setValue ((double) engine.kick.punchMs.load(), juce::dontSendNotification);
     kickParamRows[2].slider.setValue ((double) engine.kick.decayMs.load(), juce::dontSendNotification);
     kickParamRows[3].slider.setValue ((double) engine.kick.drive.load(),   juce::dontSendNotification);
+    kickParamRows[4].slider.setValue ((double) engine.kick.volume.load(),  juce::dontSendNotification);
 
     bassParamRows[0].slider.setValue ((double) engine.bass.tuneHz.load(),    juce::dontSendNotification);
     bassParamRows[1].slider.setValue ((double) engine.bass.drive.load(),     juce::dontSendNotification);
     bassParamRows[2].slider.setValue ((double) engine.bass.cutoffHz.load(),  juce::dontSendNotification);
     bassParamRows[3].slider.setValue ((double) engine.bass.resonance.load(), juce::dontSendNotification);
     bassParamRows[4].slider.setValue ((double) engine.bass.decayMs.load(),   juce::dontSendNotification);
+    bassParamRows[5].slider.setValue ((double) engine.bass.amDepth.load(),   juce::dontSendNotification);
+    bassParamRows[6].slider.setValue ((double) engine.bass.volume.load(),    juce::dontSendNotification);
+
+    bool useAM = engine.bass.useAMMode.load();
+    bassHarmonicModeButton.setButtonText (useAM ? "Harmonic: AM" : "Harmonic: Drive");
+    float ratio = engine.bass.amRatio.load();
+    bassAmRatioButtons[0].setToggleState (ratio == 1.0f, juce::dontSendNotification);
+    bassAmRatioButtons[1].setToggleState (ratio == 2.0f, juce::dontSendNotification);
+    bassAmRatioButtons[2].setToggleState (ratio == 3.0f, juce::dontSendNotification);
+
+    skankParamRows[0].slider.setValue ((double) engine.skank.tuneHz.load(),  juce::dontSendNotification);
+    skankParamRows[1].slider.setValue ((double) engine.skank.sawMix.load(),  juce::dontSendNotification);
+    skankParamRows[2].slider.setValue ((double) engine.skank.decayMs.load(), juce::dontSendNotification);
+    skankParamRows[3].slider.setValue ((double) engine.skank.drive.load(),   juce::dontSendNotification);
+    skankParamRows[4].slider.setValue ((double) engine.skank.volume.load(),  juce::dontSendNotification);
+    bool isMinor = engine.skank.minorChord.load();
+    skankMajorButton.setToggleState (! isMinor, juce::dontSendNotification);
+    skankMinorButton.setToggleState (isMinor, juce::dontSendNotification);
+    skankSawMixLaneEditor.repaint();
 }
 
 void MainComponent::setVoiceLength (RawDub::StepPattern& pattern, int newLength, int& viewPage)

@@ -14,11 +14,13 @@ public:
     // it later needs no data-model change.
     void trigger (int semitoneOffset = 0, float levelGain = 1.0f);
     void renderAdd (float* out, int numSamples);
+    void resetToDefaults(); // for "New Project" - restores every param to its shipped default
 
     std::atomic<float> tuneHz  { 60.0f };   // start pitch of the pitch envelope
     std::atomic<float> punchMs { 40.0f };   // pitch envelope speed
     std::atomic<float> decayMs { 220.0f };  // amplitude decay
     std::atomic<float> drive   { 0.2f };    // saturation amount
+    std::atomic<float> volume  { 1.0f };    // basic level balancing against Bass, 0-1, applied before the master limiter
 
 private:
     double sampleRate = 44100.0;
