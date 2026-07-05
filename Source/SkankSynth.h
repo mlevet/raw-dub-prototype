@@ -15,8 +15,6 @@ namespace RawDub
 class SkankSynth
 {
 public:
-    SkankSynth() { resetSawMixLane(); }
-
     void prepare (double sampleRate);
     // semitoneOffset transposes the whole chord's root - lets a pattern
     // move the chord around per step (progressions), without touching
@@ -36,32 +34,12 @@ public:
     std::atomic<bool>  minorChord { false }; // false = major triad, true = minor triad
     std::atomic<float> volume  { 1.0f };    // basic level balancing against Kick/Bass, 0-1, applied before the master limiter
 
-    // Sparse SawMix "curve" - a handful of draggable points connected by
-    // straight lines (see CurveLaneEditor), not automation, not one
-    // value per step. Points are stored as FRACTIONAL positions (0-1
-    // across the whole pattern) rather than step indices, so the curve
-    // is entirely independent of pattern Length - changing Length just
-    // resamples the same shape, no data massaging needed. The first and
-    // last points are fixed anchors (always at position 0 and 1) whose
-    // value can be dragged but which can never move or be removed, so
-    // the curve always spans the full pattern. Deliberately scoped to
-    // SawMix only, not a generic modulation system - see
-    // feedback_raw_dub_experiment_protocol memory. Slider/curve
-    // relationship: moving the sawMix slider collapses this curve back
-    // to a flat line at the slider's value (resetSawMixLaneToValue) -
-    // the slider is "set a constant," the curve is "compose evolution,"
-    // never two independent ways of controlling the same thing.
-    static constexpr int maxCurvePoints = 16;
-    int getSawMixCurvePointCount() const { return sawMixCurveCount.load(); }
-    float getSawMixCurvePointPosition (int index) const { return sawMixCurvePos[(size_t) index].load(); }
-    float getSawMixCurvePointValue (int index) const { return sawMixCurveVal[(size_t) index].load(); }
-    int insertSawMixCurvePoint (float position, float value); // returns new index, or -1 if at capacity
-    void setSawMixCurvePointValue (int index, float value) { sawMixCurveVal[(size_t) index].store (juce::jlimit (0.0f, 1.0f, value)); }
-    void setSawMixCurvePointPosition (int index, float position); // no-op on the two anchor points
-    void removeSawMixCurvePoint (int index); // no-op on the two anchor points, and below 2 total points
-    float sampleSawMixCurve (float fraction) const; // fraction 0-1 across the pattern
-    void resetSawMixLaneToValue (float value); // collapses to the two anchors at this value, discarding every interior point
-    void resetSawMixLane() { resetSawMixLaneToValue (0.5f); }
+    // The SawMix curve (points, not one-value-per-step) used to live
+    // here as sawMixCurve* members. Per project_raw_dub_song_architecture:
+    // a curve is musical material, not synthesis state, so it now lives
+    // in the instrument PATTERN (see SkankPatternSlot) instead - this
+    // synth only ever receives the already-evaluated value via
+    // triggerChord's sawMixOverride, exactly as before.
 
 private:
     struct Voice
@@ -70,9 +48,6 @@ private:
         double freq = 400.0;
     };
     std::array<Voice, 3> voices; // root, third, fifth
-    std::array<std::atomic<float>, maxCurvePoints> sawMixCurvePos;
-    std::array<std::atomic<float>, maxCurvePoints> sawMixCurveVal;
-    std::atomic<int> sawMixCurveCount { 2 };
 
     double sampleRate = 44100.0;
     bool active = false;

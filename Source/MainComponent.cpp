@@ -94,10 +94,11 @@ MainComponent::MainComponent()
                     kickViewPage = 0;
                     bassViewPage = 0;
                     skankViewPage = 0;
+                    currentGlobalPatternSlot = 0;
                     tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
                     refreshParamSlidersFromEngine();
                     refreshStepColours();
-                    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern.getActiveLength());
+                    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
                     resized();
                 }
             });
@@ -118,12 +119,68 @@ MainComponent::MainComponent()
                 kickViewPage = 0;
                 bassViewPage = 0;
                 skankViewPage = 0;
+                currentGlobalPatternSlot = 0;
                 tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
                 refreshParamSlidersFromEngine();
                 refreshStepColours();
-                skankSawMixLaneEditor.setGridDivisions (engine.skankPattern.getActiveLength());
+                skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
                 resized();
             }));
+    };
+
+    // --- Global Patterns (see project_raw_dub_song_architecture memory) ---
+    addAndMakeVisible (globalPatternsLabel);
+
+    // There's always a "current" Global Pattern - editing/saving is
+    // always about that one, never a mode or a target to pick (see
+    // project_raw_dub_song_architecture memory).
+    auto recallGlobalPatternUI = [this] (int slot)
+    {
+        currentGlobalPatternSlot = slot;
+        if (engine.recallGlobalPattern (slot))
+        {
+            kickViewPage = 0;
+            bassViewPage = 0;
+            skankViewPage = 0;
+            refreshStepColours();
+            skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
+            skankSawMixLaneEditor.repaint();
+            resized();
+        }
+        refreshGlobalPatternButtons();
+    };
+
+    for (int i = 0; i < RawDub::AudioEngine::globalPatternBankSize; ++i)
+    {
+        auto& btn = globalPatternButtons[(size_t) i];
+        btn.setButtonText (juce::String (i + 1));
+        addAndMakeVisible (btn);
+        // click = recall (if it has content) and become the pattern
+        // you're now editing - always the same meaning, never a mode
+        btn.onClick = [recallGlobalPatternUI, i] { recallGlobalPatternUI (i); };
+    }
+
+    addAndMakeVisible (saveGlobalPatternButton);
+    saveGlobalPatternButton.onClick = [this]
+    {
+        engine.saveCurrentAsGlobalPattern (currentGlobalPatternSlot);
+        refreshGlobalPatternButtons();
+    };
+
+    addAndMakeVisible (duplicateGlobalPatternButton);
+    duplicateGlobalPatternButton.onClick = [this]
+    {
+        // branches off into the next free slot with whatever's
+        // currently live, and switches editing there - doesn't touch
+        // the instruments (they're already exactly what's being
+        // duplicated) or the pattern it branched from
+        int freeSlot = engine.findFirstEmptyGlobalPatternSlot();
+        if (freeSlot < 0)
+            return; // bank full - nothing to duplicate into
+
+        engine.saveCurrentAsGlobalPattern (freeSlot);
+        currentGlobalPatternSlot = freeSlot;
+        refreshGlobalPatternButtons();
     };
 
     // --- prototype-only accent style switcher ---
@@ -141,7 +198,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (kickClearButton);
     kickClearButton.onClick = [this]
     {
-        engine.kickPattern.clearAll();
+        engine.kickPattern().clearAll();
         refreshStepColours();
     };
 
@@ -154,12 +211,12 @@ MainComponent::MainComponent()
         // reflects whichever page is showing
         btn.onToggle = [this, s]
         {
-            engine.kickPattern.toggle (kickViewPage * RawDub::numSteps + s);
+            engine.kickPattern().toggle (kickViewPage * RawDub::numSteps + s);
             refreshStepColours();
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
-            engine.kickPattern.setLevel (kickViewPage * RawDub::numSteps + s, lvl);
+            engine.kickPattern().setLevel (kickViewPage * RawDub::numSteps + s, lvl);
         };
     }
 
@@ -169,7 +226,7 @@ MainComponent::MainComponent()
         auto& btn = kickLengthButtons[(size_t) i];
         btn.setButtonText (juce::String (lengthOptions[i]));
         addAndMakeVisible (btn);
-        btn.onClick = [this, i] { setVoiceLength (engine.kickPattern, lengthOptions[i], kickViewPage); };
+        btn.onClick = [this, i] { setVoiceLength (engine.kickPattern(), lengthOptions[i], kickViewPage); };
     }
 
     for (int p = 0; p < maxPages; ++p)
@@ -181,6 +238,21 @@ MainComponent::MainComponent()
         {
             kickViewPage = p;
             refreshStepColours();
+        };
+    }
+
+    addAndMakeVisible (kickPatternBankLabel);
+    for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
+    {
+        auto& btn = kickPatternBankButtons[(size_t) i];
+        btn.setButtonText (juce::String (i + 1)); // 1-indexed display
+        addAndMakeVisible (btn);
+        btn.onClick = [this, i]
+        {
+            engine.setCurrentKickPatternIndex (i);
+            kickViewPage = 0;
+            refreshStepColours();
+            resized();
         };
     }
 
@@ -222,7 +294,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (bassClearButton);
     bassClearButton.onClick = [this]
     {
-        engine.bassPattern.clearAll();
+        engine.bassPattern().clearAll();
         refreshStepColours();
     };
 
@@ -233,16 +305,16 @@ MainComponent::MainComponent()
         addAndMakeVisible (btn);
         btn.onToggle = [this, s]
         {
-            engine.bassPattern.toggle (bassViewPage * RawDub::numSteps + s);
+            engine.bassPattern().toggle (bassViewPage * RawDub::numSteps + s);
             refreshStepColours();
         };
         btn.onPitchDrag = [this, s] (int offset)
         {
-            engine.bassPattern.setSemitoneOffset (bassViewPage * RawDub::numSteps + s, offset);
+            engine.bassPattern().setSemitoneOffset (bassViewPage * RawDub::numSteps + s, offset);
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
-            engine.bassPattern.setLevel (bassViewPage * RawDub::numSteps + s, lvl);
+            engine.bassPattern().setLevel (bassViewPage * RawDub::numSteps + s, lvl);
         };
     }
 
@@ -252,7 +324,7 @@ MainComponent::MainComponent()
         auto& btn = bassLengthButtons[(size_t) i];
         btn.setButtonText (juce::String (lengthOptions[i]));
         addAndMakeVisible (btn);
-        btn.onClick = [this, i] { setVoiceLength (engine.bassPattern, lengthOptions[i], bassViewPage); };
+        btn.onClick = [this, i] { setVoiceLength (engine.bassPattern(), lengthOptions[i], bassViewPage); };
     }
 
     for (int p = 0; p < maxPages; ++p)
@@ -264,6 +336,21 @@ MainComponent::MainComponent()
         {
             bassViewPage = p;
             refreshStepColours();
+        };
+    }
+
+    addAndMakeVisible (bassPatternBankLabel);
+    for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
+    {
+        auto& btn = bassPatternBankButtons[(size_t) i];
+        btn.setButtonText (juce::String (i + 1));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, i]
+        {
+            engine.setCurrentBassPatternIndex (i);
+            bassViewPage = 0;
+            refreshStepColours();
+            resized();
         };
     }
 
@@ -344,8 +431,8 @@ MainComponent::MainComponent()
     addAndMakeVisible (skankClearButton);
     skankClearButton.onClick = [this]
     {
-        engine.skankPattern.clearAll();
-        engine.skank.resetSawMixLane();
+        engine.skankPattern().clearAll();
+        engine.skankSawMixCurve().resetToValue (0.5f);
         refreshStepColours();
         skankSawMixLaneEditor.repaint();
     };
@@ -357,16 +444,16 @@ MainComponent::MainComponent()
         addAndMakeVisible (btn);
         btn.onToggle = [this, s]
         {
-            engine.skankPattern.toggle (skankViewPage * RawDub::numSteps + s);
+            engine.skankPattern().toggle (skankViewPage * RawDub::numSteps + s);
             refreshStepColours();
         };
         btn.onPitchDrag = [this, s] (int offset)
         {
-            engine.skankPattern.setSemitoneOffset (skankViewPage * RawDub::numSteps + s, offset);
+            engine.skankPattern().setSemitoneOffset (skankViewPage * RawDub::numSteps + s, offset);
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
-            engine.skankPattern.setLevel (skankViewPage * RawDub::numSteps + s, lvl);
+            engine.skankPattern().setLevel (skankViewPage * RawDub::numSteps + s, lvl);
         };
     }
 
@@ -378,7 +465,7 @@ MainComponent::MainComponent()
         addAndMakeVisible (btn);
         btn.onClick = [this, i]
         {
-            setVoiceLength (engine.skankPattern, lengthOptions[i], skankViewPage);
+            setVoiceLength (engine.skankPattern(), lengthOptions[i], skankViewPage);
             skankSawMixLaneEditor.setGridDivisions (lengthOptions[i]);
         };
     }
@@ -392,6 +479,23 @@ MainComponent::MainComponent()
         {
             skankViewPage = p;
             refreshStepColours();
+        };
+    }
+
+    addAndMakeVisible (skankPatternBankLabel);
+    for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
+    {
+        auto& btn = skankPatternBankButtons[(size_t) i];
+        btn.setButtonText (juce::String (i + 1));
+        addAndMakeVisible (btn);
+        btn.onClick = [this, i]
+        {
+            engine.setCurrentSkankPatternIndex (i);
+            skankViewPage = 0;
+            refreshStepColours();
+            skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
+            skankSawMixLaneEditor.repaint();
+            resized();
         };
     }
 
@@ -441,27 +545,27 @@ MainComponent::MainComponent()
         {
             float v = (float) skankParamRows[1].slider.getValue();
             engine.skank.sawMix.store (v);
-            engine.skank.resetSawMixLaneToValue (v);
+            engine.skankSawMixCurve().resetToValue (v);
             skankSawMixLaneEditor.repaint();
         };
     }
 
     addAndMakeVisible (skankSawMixLaneLabel);
     addAndMakeVisible (skankSawMixLaneEditor);
-    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern.getActiveLength());
-    skankSawMixLaneEditor.getPointCount = [this] { return engine.skank.getSawMixCurvePointCount(); };
-    skankSawMixLaneEditor.getPointPosition = [this] (int i) { return engine.skank.getSawMixCurvePointPosition (i); };
-    skankSawMixLaneEditor.getPointValue = [this] (int i) { return engine.skank.getSawMixCurvePointValue (i); };
-    skankSawMixLaneEditor.onPointValueChanged = [this] (int i, float v) { engine.skank.setSawMixCurvePointValue (i, v); };
-    skankSawMixLaneEditor.onPointPositionChanged = [this] (int i, float p) { engine.skank.setSawMixCurvePointPosition (i, p); };
-    skankSawMixLaneEditor.onAddPoint = [this] (float p, float v) { return engine.skank.insertSawMixCurvePoint (p, v); };
-    skankSawMixLaneEditor.onRemovePoint = [this] (int i) { engine.skank.removeSawMixCurvePoint (i); };
+    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
+    skankSawMixLaneEditor.getPointCount = [this] { return engine.skankSawMixCurve().getPointCount(); };
+    skankSawMixLaneEditor.getPointPosition = [this] (int i) { return engine.skankSawMixCurve().getPointPosition (i); };
+    skankSawMixLaneEditor.getPointValue = [this] (int i) { return engine.skankSawMixCurve().getPointValue (i); };
+    skankSawMixLaneEditor.onPointValueChanged = [this] (int i, float v) { engine.skankSawMixCurve().setPointValue (i, v); };
+    skankSawMixLaneEditor.onPointPositionChanged = [this] (int i, float p) { engine.skankSawMixCurve().setPointPosition (i, p); };
+    skankSawMixLaneEditor.onAddPoint = [this] (float p, float v) { return engine.skankSawMixCurve().insertPoint (p, v); };
+    skankSawMixLaneEditor.onRemovePoint = [this] (int i) { engine.skankSawMixCurve().removePoint (i); };
 
     refreshStepColours();
     updatePlayButtonText();
 
     setAudioChannels (0, 2);
-    setSize (820, 1950);
+    setSize (820, 2110);
     startTimerHz (30);
 }
 
@@ -532,6 +636,20 @@ void MainComponent::resized()
 
     area.removeFromTop (12);
 
+    auto globalPatternsRow = area.removeFromTop (28);
+    globalPatternsLabel.setBounds (globalPatternsRow.removeFromLeft (110));
+    for (auto& btn : globalPatternButtons)
+    {
+        btn.setBounds (globalPatternsRow.removeFromLeft (36));
+        globalPatternsRow.removeFromLeft (4);
+    }
+    globalPatternsRow.removeFromLeft (10);
+    saveGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (70));
+    globalPatternsRow.removeFromLeft (6);
+    duplicateGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (90));
+
+    area.removeFromTop (12);
+
     auto accentRow = area.removeFromTop (28);
     accentStyleLabel.setBounds (accentRow.removeFromLeft (200));
     accentStyleAButton.setBounds (accentRow.removeFromLeft (40));
@@ -559,7 +677,7 @@ void MainComponent::resized()
         kickLengthRow.removeFromLeft (6);
     }
     kickLengthRow.removeFromLeft (20);
-    int kickNumPages = (engine.kickPattern.getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    int kickNumPages = (engine.kickPattern().getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
     for (int p = 0; p < maxPages; ++p)
     {
         kickPageButtons[(size_t) p].setVisible (p < kickNumPages && kickNumPages > 1);
@@ -569,8 +687,18 @@ void MainComponent::resized()
 
     area.removeFromTop (8);
 
+    auto kickPatternBankRow = area.removeFromTop (28);
+    kickPatternBankLabel.setBounds (kickPatternBankRow.removeFromLeft (60));
+    for (auto& btn : kickPatternBankButtons)
+    {
+        btn.setBounds (kickPatternBankRow.removeFromLeft (32));
+        kickPatternBankRow.removeFromLeft (4);
+    }
+
+    area.removeFromTop (8);
+
     auto kickStepRow = area.removeFromTop (50);
-    layoutStepRow (kickStepRow, kickStepButtons, engine.kickPattern.getActiveLength(), kickViewPage);
+    layoutStepRow (kickStepRow, kickStepButtons, engine.kickPattern().getActiveLength(), kickViewPage);
 
     area.removeFromTop (10);
 
@@ -603,12 +731,22 @@ void MainComponent::resized()
         bassLengthRow.removeFromLeft (6);
     }
     bassLengthRow.removeFromLeft (20);
-    int bassNumPages = (engine.bassPattern.getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    int bassNumPages = (engine.bassPattern().getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
     for (int p = 0; p < maxPages; ++p)
     {
         bassPageButtons[(size_t) p].setVisible (p < bassNumPages && bassNumPages > 1);
         bassPageButtons[(size_t) p].setBounds (bassLengthRow.removeFromLeft (64));
         bassLengthRow.removeFromLeft (6);
+    }
+
+    area.removeFromTop (8);
+
+    auto bassPatternBankRow = area.removeFromTop (28);
+    bassPatternBankLabel.setBounds (bassPatternBankRow.removeFromLeft (60));
+    for (auto& btn : bassPatternBankButtons)
+    {
+        btn.setBounds (bassPatternBankRow.removeFromLeft (32));
+        bassPatternBankRow.removeFromLeft (4);
     }
 
     area.removeFromTop (8);
@@ -628,7 +766,7 @@ void MainComponent::resized()
     // 160px gives ~6px/semitone across the +/-12 range, enough to actually
     // read a contour.
     auto bassStepRow = area.removeFromTop (160);
-    layoutStepRow (bassStepRow, bassStepButtons, engine.bassPattern.getActiveLength(), bassViewPage);
+    layoutStepRow (bassStepRow, bassStepButtons, engine.bassPattern().getActiveLength(), bassViewPage);
 
     area.removeFromTop (10);
 
@@ -659,7 +797,7 @@ void MainComponent::resized()
         skankLengthRow.removeFromLeft (6);
     }
     skankLengthRow.removeFromLeft (20);
-    int skankNumPages = (engine.skankPattern.getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    int skankNumPages = (engine.skankPattern().getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
     for (int p = 0; p < maxPages; ++p)
     {
         skankPageButtons[(size_t) p].setVisible (p < skankNumPages && skankNumPages > 1);
@@ -669,8 +807,18 @@ void MainComponent::resized()
 
     area.removeFromTop (8);
 
+    auto skankPatternBankRow = area.removeFromTop (28);
+    skankPatternBankLabel.setBounds (skankPatternBankRow.removeFromLeft (60));
+    for (auto& btn : skankPatternBankButtons)
+    {
+        btn.setBounds (skankPatternBankRow.removeFromLeft (32));
+        skankPatternBankRow.removeFromLeft (4);
+    }
+
+    area.removeFromTop (8);
+
     auto skankStepRow = area.removeFromTop (120);
-    layoutStepRow (skankStepRow, skankStepButtons, engine.skankPattern.getActiveLength(), skankViewPage);
+    layoutStepRow (skankStepRow, skankStepButtons, engine.skankPattern().getActiveLength(), skankViewPage);
 
     area.removeFromTop (10);
 
@@ -714,7 +862,7 @@ void MainComponent::timerCallback()
 
 void MainComponent::refreshStepColours()
 {
-    int kickLength = engine.kickPattern.getActiveLength();
+    int kickLength = engine.kickPattern().getActiveLength();
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         int kickIndex = kickViewPage * RawDub::numSteps + s;
@@ -722,12 +870,12 @@ void MainComponent::refreshStepColours()
             continue;
 
         auto& kickBtn = kickStepButtons[(size_t) s];
-        kickBtn.setOn (engine.kickPattern.isOn (kickIndex));
-        kickBtn.setLevel (engine.kickPattern.getLevel (kickIndex));
+        kickBtn.setOn (engine.kickPattern().isOn (kickIndex));
+        kickBtn.setLevel (engine.kickPattern().getLevel (kickIndex));
         kickBtn.setPlayhead (kickIndex == kickPlayheadStep);
     }
 
-    int bassLength = engine.bassPattern.getActiveLength();
+    int bassLength = engine.bassPattern().getActiveLength();
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         int bassIndex = bassViewPage * RawDub::numSteps + s;
@@ -735,13 +883,13 @@ void MainComponent::refreshStepColours()
             continue;
 
         auto& bassBtn = bassStepButtons[(size_t) s];
-        bassBtn.setOn (engine.bassPattern.isOn (bassIndex));
-        bassBtn.setLevel (engine.bassPattern.getLevel (bassIndex));
-        bassBtn.setSemitoneOffset (engine.bassPattern.getSemitoneOffset (bassIndex));
+        bassBtn.setOn (engine.bassPattern().isOn (bassIndex));
+        bassBtn.setLevel (engine.bassPattern().getLevel (bassIndex));
+        bassBtn.setSemitoneOffset (engine.bassPattern().getSemitoneOffset (bassIndex));
         bassBtn.setPlayhead (bassIndex == bassPlayheadStep);
     }
 
-    int skankLength = engine.skankPattern.getActiveLength();
+    int skankLength = engine.skankPattern().getActiveLength();
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         int skankIndex = skankViewPage * RawDub::numSteps + s;
@@ -749,9 +897,9 @@ void MainComponent::refreshStepColours()
             continue;
 
         auto& skankBtn = skankStepButtons[(size_t) s];
-        skankBtn.setOn (engine.skankPattern.isOn (skankIndex));
-        skankBtn.setLevel (engine.skankPattern.getLevel (skankIndex));
-        skankBtn.setSemitoneOffset (engine.skankPattern.getSemitoneOffset (skankIndex));
+        skankBtn.setOn (engine.skankPattern().isOn (skankIndex));
+        skankBtn.setLevel (engine.skankPattern().getLevel (skankIndex));
+        skankBtn.setSemitoneOffset (engine.skankPattern().getSemitoneOffset (skankIndex));
         skankBtn.setPlayhead (skankIndex == skankPlayheadStep);
     }
 
@@ -796,9 +944,46 @@ void MainComponent::refreshStepColours()
         }
     };
 
-    refreshLengthButtons (kickLengthButtons, engine.kickPattern.getActiveLength());
-    refreshLengthButtons (bassLengthButtons, engine.bassPattern.getActiveLength());
-    refreshLengthButtons (skankLengthButtons, engine.skankPattern.getActiveLength());
+    refreshLengthButtons (kickLengthButtons, engine.kickPattern().getActiveLength());
+    refreshLengthButtons (bassLengthButtons, engine.bassPattern().getActiveLength());
+    refreshLengthButtons (skankLengthButtons, engine.skankPattern().getActiveLength());
+
+    // pattern bank buttons: black = the pattern slot currently selected
+    // for that instrument - same convention as Length/page buttons
+    auto refreshBankButtons = [] (std::array<juce::TextButton, RawDub::AudioEngine::bankSize>& bankButtons, int currentIndex)
+    {
+        for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
+        {
+            bool isActive = (i == currentIndex);
+            bankButtons[(size_t) i].setColour (juce::TextButton::buttonColourId, isActive ? juce::Colours::black : juce::Colours::white);
+            bankButtons[(size_t) i].setColour (juce::TextButton::textColourOffId, isActive ? juce::Colours::white : juce::Colours::black);
+        }
+    };
+
+    refreshBankButtons (kickPatternBankButtons, engine.getCurrentKickPatternIndex());
+    refreshBankButtons (bassPatternBankButtons, engine.getCurrentBassPatternIndex());
+    refreshBankButtons (skankPatternBankButtons, engine.getCurrentSkankPatternIndex());
+
+    refreshGlobalPatternButtons();
+}
+
+// black = the currently recalled/saved-to slot; unused (never-saved)
+// slots read visibly different (grey text) from saved-but-not-current
+// ones, so it's clear at a glance which numbers actually hold anything
+void MainComponent::refreshGlobalPatternButtons()
+{
+    for (int i = 0; i < RawDub::AudioEngine::globalPatternBankSize; ++i)
+    {
+        auto& btn = globalPatternButtons[(size_t) i];
+        bool isCurrent = (i == currentGlobalPatternSlot);
+        bool isUsed = engine.isGlobalPatternUsed (i);
+
+        auto bg = isCurrent ? juce::Colours::black : juce::Colours::white;
+        auto fg = isCurrent ? juce::Colours::white : (isUsed ? juce::Colours::black : juce::Colours::lightgrey);
+
+        btn.setColour (juce::TextButton::buttonColourId, bg);
+        btn.setColour (juce::TextButton::textColourOffId, fg);
+    }
 }
 
 void MainComponent::updatePlayButtonText()

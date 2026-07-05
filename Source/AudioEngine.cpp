@@ -4,8 +4,17 @@
 namespace RawDub
 {
 AudioEngine::AudioEngine()
-    : kickPattern (numSteps), bassPattern (StepPattern::maxLength), skankPattern (StepPattern::maxLength)
 {
+    kickBank.reserve ((size_t) bankSize);
+    bassBank.reserve ((size_t) bankSize);
+    skankBank.reserve ((size_t) bankSize);
+
+    for (int i = 0; i < bankSize; ++i)
+    {
+        kickBank.emplace_back (numSteps);
+        bassBank.emplace_back (StepPattern::maxLength);
+        skankBank.emplace_back (StepPattern::maxLength);
+    }
 }
 
 void AudioEngine::prepare (double newSampleRate, int)
@@ -24,12 +33,29 @@ void AudioEngine::resetToDefaults()
     stop();
     tempoBpm.store (120.0);
 
-    kickPattern.clearAll();
-    kickPattern.setActiveLength (numSteps);
-    bassPattern.clearAll();
-    bassPattern.setActiveLength (StepPattern::maxLength);
-    skankPattern.clearAll();
-    skankPattern.setActiveLength (StepPattern::maxLength);
+    for (auto& p : kickBank)
+    {
+        p.clearAll();
+        p.setActiveLength (numSteps);
+    }
+    for (auto& p : bassBank)
+    {
+        p.clearAll();
+        p.setActiveLength (StepPattern::maxLength);
+    }
+    for (auto& s : skankBank)
+    {
+        s.steps.clearAll();
+        s.steps.setActiveLength (StepPattern::maxLength);
+        s.sawMixCurve.resetToValue (0.5f);
+    }
+
+    currentKickIndex.store (0);
+    currentBassIndex.store (0);
+    currentSkankIndex.store (0);
+
+    for (auto& gp : globalPatterns)
+        gp = GlobalPattern {};
 
     kick.resetToDefaults();
     bass.resetToDefaults();
@@ -53,26 +79,26 @@ void AudioEngine::advanceStep()
     // cycle length is whichever pattern is currently longer; both lengths
     // are always powers of two from {4,16,32,64}, so the shorter one
     // divides the longer one exactly and they stay in phase
-    int cycleLength = juce::jmax (kickPattern.getActiveLength(),
-                                  juce::jmax (bassPattern.getActiveLength(), skankPattern.getActiveLength()));
+    int cycleLength = juce::jmax (kickPattern().getActiveLength(),
+                                  juce::jmax (bassPattern().getActiveLength(), skankPattern().getActiveLength()));
     globalStep = (globalStep + 1) % cycleLength;
     globalStepAtomic.store (globalStep);
 
-    int kickStep = globalStep % kickPattern.getActiveLength();
-    if (kickPattern.isOn (kickStep))
-        kick.trigger (kickPattern.getSemitoneOffset (kickStep), stepLevelGain (kickPattern.getLevel (kickStep)));
+    int kickStep = globalStep % kickPattern().getActiveLength();
+    if (kickPattern().isOn (kickStep))
+        kick.trigger (kickPattern().getSemitoneOffset (kickStep), stepLevelGain (kickPattern().getLevel (kickStep)));
 
-    int bassStep = globalStep % bassPattern.getActiveLength();
-    if (bassPattern.isOn (bassStep))
-        bass.trigger (bassPattern.getSemitoneOffset (bassStep), stepLevelGain (bassPattern.getLevel (bassStep)));
+    int bassStep = globalStep % bassPattern().getActiveLength();
+    if (bassPattern().isOn (bassStep))
+        bass.trigger (bassPattern().getSemitoneOffset (bassStep), stepLevelGain (bassPattern().getLevel (bassStep)));
 
-    int skankLen = skankPattern.getActiveLength();
+    int skankLen = skankPattern().getActiveLength();
     int skankStep = globalStep % skankLen;
-    if (skankPattern.isOn (skankStep))
+    if (skankPattern().isOn (skankStep))
     {
         float fraction = skankLen > 1 ? (float) skankStep / (float) (skankLen - 1) : 0.0f;
-        skank.triggerChord (skankPattern.getSemitoneOffset (skankStep), stepLevelGain (skankPattern.getLevel (skankStep)),
-                             skank.sampleSawMixCurve (fraction));
+        skank.triggerChord (skankPattern().getSemitoneOffset (skankStep), stepLevelGain (skankPattern().getLevel (skankStep)),
+                             skankSawMixCurve().sample (fraction));
     }
 }
 

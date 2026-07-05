@@ -23,6 +23,7 @@ public:
 private:
     void timerCallback() override;
     void refreshStepColours();
+    void refreshGlobalPatternButtons();
     void updatePlayButtonText();
     void setAccentStyle (int style);
     void refreshParamSlidersFromEngine();
@@ -53,6 +54,24 @@ private:
     juce::File currentProjectFile;
     std::unique_ptr<juce::FileChooser> fileChooser; // must outlive an async chooser dialog
 
+    // Global Patterns - see project_raw_dub_song_architecture memory. A
+    // Global Pattern has no musical data of its own, just a saved
+    // combination of the three instruments' current pattern-bank
+    // indices. There is always a "current" one (like there's always a
+    // current pattern per instrument) - clicking a number recalls it
+    // (if it has content) and makes it the thing you're now editing.
+    // Save always writes to whichever one is current - never a mode,
+    // never a target to pick. Duplicate branches off into the next
+    // free slot and switches editing there, for "this deserves to
+    // become its own pattern" without disturbing the original.
+    // Project-level, not per-instrument, so it sits above the
+    // instrument sections.
+    juce::Label globalPatternsLabel { {}, "Global Patterns" };
+    std::array<juce::TextButton, RawDub::AudioEngine::globalPatternBankSize> globalPatternButtons;
+    juce::TextButton saveGlobalPatternButton { "Save" };
+    juce::TextButton duplicateGlobalPatternButton { "Duplicate" };
+    int currentGlobalPatternSlot = 0; // always valid, defaults to Pattern 1
+
     // prototype-only: comparing accent visual treatments, remove once decided
     juce::Label accentStyleLabel { {}, "Accent style (prototype)" };
     juce::TextButton accentStyleAButton { "A" };
@@ -77,6 +96,13 @@ private:
     std::array<juce::TextButton, maxPages> kickPageButtons;
     int kickViewPage = 0;
 
+    // Instrument pattern bank - see project_raw_dub_song_architecture
+    // memory. Selects which of AudioEngine::bankSize saved patterns is
+    // currently live for editing/playback. 1-indexed in the UI, 0-indexed
+    // internally (AudioEngine::setCurrentKickPatternIndex etc).
+    juce::Label kickPatternBankLabel { {}, "Pattern" };
+    std::array<juce::TextButton, RawDub::AudioEngine::bankSize> kickPatternBankButtons;
+
     // Bass - same idea, length selectable 4/16/32/64.
     juce::TextButton bassTriggerButton { "Trigger" };
     juce::TextButton bassClearButton { "Clear" };
@@ -87,6 +113,9 @@ private:
     std::array<juce::TextButton, 4> bassLengthButtons;
     std::array<juce::TextButton, maxPages> bassPageButtons;
     int bassViewPage = 0;
+
+    juce::Label bassPatternBankLabel { {}, "Pattern" };
+    std::array<juce::TextButton, RawDub::AudioEngine::bankSize> bassPatternBankButtons;
 
     // research switch, not permanent UI - see BassSynth::useAMMode.
     // Ratio deliberately discrete (not a slider) - only simple integer
@@ -116,12 +145,16 @@ private:
     int skankViewPage = 0;
     int skankPlayheadStep = -1;
 
+    juce::Label skankPatternBankLabel { {}, "Pattern" };
+    std::array<juce::TextButton, RawDub::AudioEngine::bankSize> skankPatternBankButtons;
+
     // sparse draggable-point SawMix curve - see CurveLaneEditor.h and
-    // SkankSynth's sawMixCurve*  methods. Deliberately scoped to SawMix
-    // only, no generic modulation routing. Moving the SawMix slider
-    // flattens this curve to the slider's value (slider = static state,
-    // curve = animated state - see feedback_raw_dub_experiment_protocol
-    // memory for the general principle).
+    // PointCurve (lives in the current Skank pattern slot, via
+    // AudioEngine::skankSawMixCurve() - not in SkankSynth, see
+    // project_raw_dub_song_architecture memory). Deliberately scoped to
+    // SawMix only, no generic modulation routing. Moving the SawMix
+    // slider flattens the curve to the slider's value (slider = static
+    // state, curve = animated state).
     juce::Label skankSawMixLaneLabel { {}, "SawMix Curve" };
     RawDub::CurveLaneEditor skankSawMixLaneEditor;
 

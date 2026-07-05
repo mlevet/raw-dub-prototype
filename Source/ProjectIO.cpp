@@ -4,7 +4,7 @@ namespace RawDub
 {
 namespace
 {
-juce::var patternToVar (StepPattern& pattern)
+juce::var patternToVar (const StepPattern& pattern)
 {
     juce::Array<juce::var> onArr, levelArr, offsetArr;
     for (int i = 0; i < StepPattern::maxLength; ++i)
@@ -44,6 +44,75 @@ void patternFromVar (const juce::var& v, StepPattern& pattern)
             pattern.setSemitoneOffset (i, (int) (*offsetArr)[i]);
     }
 }
+
+juce::var curveToVar (const PointCurve& curve)
+{
+    juce::Array<juce::var> points;
+    int count = curve.getPointCount();
+    for (int i = 0; i < count; ++i)
+    {
+        auto* pt = new juce::DynamicObject();
+        pt->setProperty ("pos", (double) curve.getPointPosition (i));
+        pt->setProperty ("val", (double) curve.getPointValue (i));
+        points.add (juce::var (pt));
+    }
+    return points;
+}
+
+void curveFromVar (const juce::var& v, PointCurve& curve)
+{
+    curve.resetToValue (0.5f);
+
+    auto* arr = v.getArray();
+    if (arr == nullptr || arr->size() < 2)
+        return;
+
+    // first/last saved points are always the anchors (position 0 and 1
+    // by construction) - just restore their values; interior points
+    // get re-inserted in order
+    curve.setPointValue (0, (float) (double) (*arr)[0].getProperty ("val", 0.5));
+    curve.setPointValue (1, (float) (double) (*arr)[arr->size() - 1].getProperty ("val", 0.5));
+    for (int i = 1; i < arr->size() - 1; ++i)
+    {
+        auto ptVar = (*arr)[i];
+        float pos = (float) (double) ptVar.getProperty ("pos", 0.5);
+        float val = (float) (double) ptVar.getProperty ("val", 0.5);
+        curve.insertPoint (pos, val);
+    }
+}
+
+// Instrument pattern banks - see project_raw_dub_song_architecture
+// memory. Saves every slot in the bank plus which one is currently
+// selected, not just the live pattern - so switching banks and saving
+// preserves every slot's own material.
+juce::var kickBankToVar (AudioEngine& engine)
+{
+    juce::Array<juce::var> arr;
+    for (auto& p : engine.kickBank)
+        arr.add (patternToVar (p));
+    return arr;
+}
+
+juce::var bassBankToVar (AudioEngine& engine)
+{
+    juce::Array<juce::var> arr;
+    for (auto& p : engine.bassBank)
+        arr.add (patternToVar (p));
+    return arr;
+}
+
+juce::var skankBankToVar (AudioEngine& engine)
+{
+    juce::Array<juce::var> arr;
+    for (auto& slot : engine.skankBank)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("pattern", patternToVar (slot.steps));
+        obj->setProperty ("sawMixCurve", curveToVar (slot.sawMixCurve));
+        arr.add (juce::var (obj));
+    }
+    return arr;
+}
 }
 
 juce::File ProjectIO::getDefaultProjectFile()
@@ -68,7 +137,8 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
 
     auto* kickObj = new juce::DynamicObject();
     kickObj->setProperty ("params", juce::var (kickParams));
-    kickObj->setProperty ("pattern", patternToVar (engine.kickPattern));
+    kickObj->setProperty ("currentPatternIndex", engine.getCurrentKickPatternIndex());
+    kickObj->setProperty ("patternBank", kickBankToVar (engine));
     root->setProperty ("kick", juce::var (kickObj));
 
     auto* bassParams = new juce::DynamicObject();
@@ -84,7 +154,8 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
 
     auto* bassObj = new juce::DynamicObject();
     bassObj->setProperty ("params", juce::var (bassParams));
-    bassObj->setProperty ("pattern", patternToVar (engine.bassPattern));
+    bassObj->setProperty ("currentPatternIndex", engine.getCurrentBassPatternIndex());
+    bassObj->setProperty ("patternBank", bassBankToVar (engine));
     root->setProperty ("bass", juce::var (bassObj));
 
     auto* skankParams = new juce::DynamicObject();
@@ -95,21 +166,32 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     skankParams->setProperty ("minor",  engine.skank.minorChord.load());
     skankParams->setProperty ("volume", (double) engine.skank.volume.load());
 
-    juce::Array<juce::var> sawMixCurveArr;
-    int sawMixPointCount = engine.skank.getSawMixCurvePointCount();
-    for (int i = 0; i < sawMixPointCount; ++i)
-    {
-        auto* pt = new juce::DynamicObject();
-        pt->setProperty ("pos", (double) engine.skank.getSawMixCurvePointPosition (i));
-        pt->setProperty ("val", (double) engine.skank.getSawMixCurvePointValue (i));
-        sawMixCurveArr.add (juce::var (pt));
-    }
-
     auto* skankObj = new juce::DynamicObject();
     skankObj->setProperty ("params", juce::var (skankParams));
-    skankObj->setProperty ("pattern", patternToVar (engine.skankPattern));
-    skankObj->setProperty ("sawMixCurve", sawMixCurveArr);
+    skankObj->setProperty ("currentPatternIndex", engine.getCurrentSkankPatternIndex());
+    skankObj->setProperty ("patternBank", skankBankToVar (engine));
     root->setProperty ("skank", juce::var (skankObj));
+
+    // Global Patterns - see project_raw_dub_song_architecture memory.
+    // No musical data, just three saved indices per slot.
+    juce::Array<juce::var> globalPatternsArr;
+    for (int i = 0; i < AudioEngine::globalPatternBankSize; ++i)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("used", engine.isGlobalPatternUsed (i));
+        if (engine.isGlobalPatternUsed (i))
+        {
+            // recall into a scratch state would be needed to read these
+            // back out cleanly, but the struct is a simple public
+            // aggregate on AudioEngine, so read it directly instead
+            const auto& gp = engine.globalPatterns[(size_t) i];
+            obj->setProperty ("kick", gp.kickIndex);
+            obj->setProperty ("bass", gp.bassIndex);
+            obj->setProperty ("skank", gp.skankIndex);
+        }
+        globalPatternsArr.add (juce::var (obj));
+    }
+    root->setProperty ("globalPatterns", globalPatternsArr);
 
     juce::var rootVar (root);
     return file.replaceWithText (juce::JSON::toString (rootVar));
@@ -135,7 +217,20 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         engine.kick.decayMs.store ((float) (double) p.getProperty ("decay", (double) engine.kick.decayMs.load()));
         engine.kick.drive.store   ((float) (double) p.getProperty ("drive", (double) engine.kick.drive.load()));
         engine.kick.volume.store  ((float) (double) p.getProperty ("volume", (double) engine.kick.volume.load()));
-        patternFromVar (kickVar.getProperty ("pattern", juce::var()), engine.kickPattern);
+
+        auto* bankArr = kickVar.getProperty ("patternBank", juce::var()).getArray();
+        if (bankArr != nullptr)
+        {
+            for (int i = 0; i < AudioEngine::bankSize && i < bankArr->size(); ++i)
+                patternFromVar ((*bankArr)[i], engine.kickBank[(size_t) i]);
+            engine.setCurrentKickPatternIndex ((int) kickVar.getProperty ("currentPatternIndex", 0));
+        }
+        else
+        {
+            // legacy single-pattern save, from before pattern banks existed
+            patternFromVar (kickVar.getProperty ("pattern", juce::var()), engine.kickBank[0]);
+            engine.setCurrentKickPatternIndex (0);
+        }
     }
 
     auto bassVar = rootVar.getProperty ("bass", juce::var());
@@ -151,7 +246,19 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         engine.bass.useAMMode.store ((bool) p.getProperty ("useAM", engine.bass.useAMMode.load()));
         engine.bass.amRatio.store  ((float) (double) p.getProperty ("amRatio",   (double) engine.bass.amRatio.load()));
         engine.bass.amDepth.store  ((float) (double) p.getProperty ("amDepth",   (double) engine.bass.amDepth.load()));
-        patternFromVar (bassVar.getProperty ("pattern", juce::var()), engine.bassPattern);
+
+        auto* bankArr = bassVar.getProperty ("patternBank", juce::var()).getArray();
+        if (bankArr != nullptr)
+        {
+            for (int i = 0; i < AudioEngine::bankSize && i < bankArr->size(); ++i)
+                patternFromVar ((*bankArr)[i], engine.bassBank[(size_t) i]);
+            engine.setCurrentBassPatternIndex ((int) bassVar.getProperty ("currentPatternIndex", 0));
+        }
+        else
+        {
+            patternFromVar (bassVar.getProperty ("pattern", juce::var()), engine.bassBank[0]);
+            engine.setCurrentBassPatternIndex (0);
+        }
     }
 
     auto skankVar = rootVar.getProperty ("skank", juce::var());
@@ -164,26 +271,41 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         engine.skank.drive.store     ((float) (double) p.getProperty ("drive",  (double) engine.skank.drive.load()));
         engine.skank.minorChord.store ((bool) p.getProperty ("minor", engine.skank.minorChord.load()));
         engine.skank.volume.store    ((float) (double) p.getProperty ("volume", (double) engine.skank.volume.load()));
-        patternFromVar (skankVar.getProperty ("pattern", juce::var()), engine.skankPattern);
 
-        auto* curveArr = skankVar.getProperty ("sawMixCurve", juce::var()).getArray();
-        if (curveArr != nullptr && curveArr->size() >= 2)
+        auto* bankArr = skankVar.getProperty ("patternBank", juce::var()).getArray();
+        if (bankArr != nullptr)
         {
-            // first/last saved points are always the anchors (position 0
-            // and 1 by construction) - just restore their values; any
-            // interior points get re-inserted in order
-            engine.skank.resetSawMixLaneToValue (0.5f);
-            engine.skank.setSawMixCurvePointValue (0, (float) (double) (*curveArr)[0].getProperty ("val", 0.5));
-            engine.skank.setSawMixCurvePointValue (1, (float) (double) (*curveArr)[curveArr->size() - 1].getProperty ("val", 0.5));
-            for (int i = 1; i < curveArr->size() - 1; ++i)
+            for (int i = 0; i < AudioEngine::bankSize && i < bankArr->size(); ++i)
             {
-                auto ptVar = (*curveArr)[i];
-                float pos = (float) (double) ptVar.getProperty ("pos", 0.5);
-                float val = (float) (double) ptVar.getProperty ("val", 0.5);
-                engine.skank.insertSawMixCurvePoint (pos, val);
+                auto slotVar = (*bankArr)[i];
+                patternFromVar (slotVar.getProperty ("pattern", juce::var()), engine.skankBank[(size_t) i].steps);
+                curveFromVar (slotVar.getProperty ("sawMixCurve", juce::var()), engine.skankBank[(size_t) i].sawMixCurve);
             }
+            engine.setCurrentSkankPatternIndex ((int) skankVar.getProperty ("currentPatternIndex", 0));
+        }
+        else
+        {
+            // legacy single-pattern save
+            patternFromVar (skankVar.getProperty ("pattern", juce::var()), engine.skankBank[0].steps);
+            curveFromVar (skankVar.getProperty ("sawMixCurve", juce::var()), engine.skankBank[0].sawMixCurve);
+            engine.setCurrentSkankPatternIndex (0);
         }
     }
+
+    auto* globalPatternsArr = rootVar.getProperty ("globalPatterns", juce::var()).getArray();
+    if (globalPatternsArr != nullptr)
+    {
+        for (int i = 0; i < AudioEngine::globalPatternBankSize && i < globalPatternsArr->size(); ++i)
+        {
+            auto slotVar = (*globalPatternsArr)[i];
+            auto& gp = engine.globalPatterns[(size_t) i];
+            gp.used = (bool) slotVar.getProperty ("used", false);
+            gp.kickIndex = (int) slotVar.getProperty ("kick", 0);
+            gp.bassIndex = (int) slotVar.getProperty ("bass", 0);
+            gp.skankIndex = (int) slotVar.getProperty ("skank", 0);
+        }
+    }
+    // absent entirely = legacy save from before Global Patterns existed - leave all slots unused, nothing to migrate
 
     return true;
 }
