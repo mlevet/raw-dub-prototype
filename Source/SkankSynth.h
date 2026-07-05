@@ -23,7 +23,10 @@ public:
     // Trigger / unsequenced use); 0-1 means "use this instead for this
     // hit" - how the sequencer feeds in a per-step value from the shape
     // lane, see sawMixLane below.
-    void triggerChord (int semitoneOffset = 0, float levelGain = 1.0f, float sawMixOverride = -1.0f);
+    // decayOverride: same -1 sentinel convention, for a Global Pattern's
+    // section-level voicing override (see project_raw_dub_song_architecture
+    // memory and BassSynth's driveOverride/cutoffOverride).
+    void triggerChord (int semitoneOffset = 0, float levelGain = 1.0f, float sawMixOverride = -1.0f, float decayOverride = -1.0f);
     void renderAdd (float* out, int numSamples);
     void resetToDefaults(); // for "New Project" - restores every param to its shipped default
 

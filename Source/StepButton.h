@@ -22,7 +22,6 @@ public:
     void setSemitoneOffset (int newOffset);
     void setLevel (StepLevel newLevel);
     void setPlayhead (bool isCurrentStep);
-    void setAccentStyle (int style); // prototype-only: 0/1/2, for comparing visual treatments
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -30,14 +29,13 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
 
 private:
-    void paintAccentMarker (juce::Graphics&, juce::Rectangle<float> bar);
+    void paintAccentMarker (juce::Graphics&, juce::Rectangle<float> bar); // corner notch - the only style, chosen after comparing three
 
     bool hasPitch = false;
     bool on = false;
     bool playhead = false;
     int semitoneOffset = 0;
     StepLevel level = StepLevel::Normal;
-    int accentStyle = 0;
 
     int dragStartX = 0, dragStartY = 0;
     int dragStartOffset = 0;

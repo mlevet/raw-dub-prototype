@@ -1,5 +1,4 @@
 #include "StepButton.h"
-#include "Scale.h"
 
 namespace RawDub
 {
@@ -39,15 +38,6 @@ void StepButton::setPlayhead (bool isCurrentStep)
     }
 }
 
-void StepButton::setAccentStyle (int style)
-{
-    if (accentStyle != style)
-    {
-        accentStyle = style;
-        repaint();
-    }
-}
-
 void StepButton::paint (juce::Graphics& g)
 {
     auto full = getLocalBounds().toFloat();
@@ -79,38 +69,15 @@ void StepButton::paint (juce::Graphics& g)
 
 void StepButton::paintAccentMarker (juce::Graphics& g, juce::Rectangle<float> bar)
 {
+    // corner notch - chosen after comparing three visual treatments live
     g.setColour (juce::Colours::white);
-
-    if (accentStyle == 0)
-    {
-        // corner notch
-        float n = juce::jmin (bar.getWidth(), bar.getHeight()) * 0.4f;
-        juce::Path p;
-        p.startNewSubPath (bar.getRight(), bar.getY());
-        p.lineTo (bar.getRight(), bar.getY() + n);
-        p.lineTo (bar.getRight() - n, bar.getY());
-        p.closeSubPath();
-        g.fillPath (p);
-    }
-    else if (accentStyle == 1)
-    {
-        // inset frame
-        auto inset = bar.reduced (juce::jmin (bar.getWidth(), bar.getHeight()) * 0.22f);
-        g.drawRect (inset, 1.5f);
-    }
-    else
-    {
-        // accent chevron, borrowed straight from staff notation
-        auto cx = bar.getCentreX();
-        auto top = bar.getY() + bar.getHeight() * 0.18f;
-        auto h = juce::jmin (bar.getWidth(), bar.getHeight()) * 0.32f;
-
-        juce::Path p;
-        p.startNewSubPath (cx - h * 0.5f, top);
-        p.lineTo (cx + h * 0.5f, top + h * 0.5f);
-        p.lineTo (cx - h * 0.5f, top + h);
-        g.strokePath (p, juce::PathStrokeType (2.0f));
-    }
+    float n = juce::jmin (bar.getWidth(), bar.getHeight()) * 0.4f;
+    juce::Path p;
+    p.startNewSubPath (bar.getRight(), bar.getY());
+    p.lineTo (bar.getRight(), bar.getY() + n);
+    p.lineTo (bar.getRight() - n, bar.getY());
+    p.closeSubPath();
+    g.fillPath (p);
 }
 
 void StepButton::mouseDown (const juce::MouseEvent& e)
@@ -155,8 +122,7 @@ void StepButton::mouseDrag (const juce::MouseEvent& e)
     if (draggingVertical)
     {
         int deltaSemitones = deltaY / pixelsPerSemitone;
-        int rawOffset = juce::jlimit (-12, 12, dragStartOffset + deltaSemitones);
-        int newOffset = nearestScaleDegreeOffset (rawOffset);
+        int newOffset = juce::jlimit (-12, 12, dragStartOffset + deltaSemitones);
 
         if (newOffset != semitoneOffset)
         {

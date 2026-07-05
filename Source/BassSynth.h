@@ -8,7 +8,16 @@ class BassSynth
 {
 public:
     void prepare (double sampleRate);
-    void trigger (int semitoneOffset = 0, float levelGain = 1.0f);
+    // driveOverride/cutoffOverride: -1 (default) means "use the Drive/
+    // Cutoff knob"; otherwise use this instead for this note - how a
+    // Global Pattern's section-level voicing override feeds in (see
+    // project_raw_dub_song_architecture memory: instrument params are
+    // the track's base identity, Global Pattern overrides are section
+    // variations). Same sentinel convention as SkankSynth's
+    // sawMixOverride. Volume deliberately has no override yet - it's a
+    // real-time mixing control, not a per-note voicing snapshot like
+    // these two, and belongs to a future mixer/performance layer.
+    void trigger (int semitoneOffset = 0, float levelGain = 1.0f, float driveOverride = -1.0f, float cutoffOverride = -1.0f);
     void renderAdd (float* out, int numSamples);
     void resetToDefaults(); // for "New Project" - restores every param to its shipped default
 
@@ -68,7 +77,7 @@ private:
     // actually heard, reduce the dB value here, don't add a UI control.
     static constexpr double amMakeupGainDb = 5.0;
     static constexpr double amMakeupGain = 1.7783; // 10^(amMakeupGainDb/20), precomputed to avoid a runtime pow() in the audio callback
-    void applyTrigger (int semitoneOffset, float levelGain);
+    void applyTrigger (int semitoneOffset, float levelGain, float driveOverride, float cutoffOverride);
 
     double sampleRate = 44100.0;
     bool active = false;
@@ -103,6 +112,8 @@ private:
     double chokeT = 0.0;
     int pendingSemitoneOffset = 0;
     float pendingLevelGain = 1.0f;
+    float pendingDriveOverride = -1.0f;
+    float pendingCutoffOverride = -1.0f;
 
     // Reverted to 0.6 (was 0.85) - raising it made an existing click at
     // note onset more audible without adding "authority," so the extra

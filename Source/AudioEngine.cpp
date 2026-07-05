@@ -53,9 +53,10 @@ void AudioEngine::resetToDefaults()
     currentKickIndex.store (0);
     currentBassIndex.store (0);
     currentSkankIndex.store (0);
+    currentGlobalPatternSlot.store (0);
 
     for (auto& gp : globalPatterns)
-        gp = GlobalPattern {};
+        gp.reset();
 
     kick.resetToDefaults();
     bass.resetToDefaults();
@@ -90,15 +91,26 @@ void AudioEngine::advanceStep()
 
     int bassStep = globalStep % bassPattern().getActiveLength();
     if (bassPattern().isOn (bassStep))
-        bass.trigger (bassPattern().getSemitoneOffset (bassStep), stepLevelGain (bassPattern().getLevel (bassStep)));
+    {
+        // section-level voicing override - see ParamOverride/GlobalPattern
+        // in AudioEngine.h. -1 sentinel (BassSynth's "use my own knob")
+        // when the current Global Pattern has no override active.
+        const auto& gp = globalPatterns[(size_t) currentGlobalPatternSlot.load()];
+        float driveOverride = gp.bassDriveOverride.active.load() ? gp.bassDriveOverride.value.load() : -1.0f;
+        float cutoffOverride = gp.bassCutoffOverride.active.load() ? gp.bassCutoffOverride.value.load() : -1.0f;
+        bass.trigger (bassPattern().getSemitoneOffset (bassStep), stepLevelGain (bassPattern().getLevel (bassStep)),
+                      driveOverride, cutoffOverride);
+    }
 
     int skankLen = skankPattern().getActiveLength();
     int skankStep = globalStep % skankLen;
     if (skankPattern().isOn (skankStep))
     {
         float fraction = skankLen > 1 ? (float) skankStep / (float) (skankLen - 1) : 0.0f;
+        const auto& skankGp = globalPatterns[(size_t) currentGlobalPatternSlot.load()];
+        float decayOverride = skankGp.skankDecayOverride.active.load() ? skankGp.skankDecayOverride.value.load() : -1.0f;
         skank.triggerChord (skankPattern().getSemitoneOffset (skankStep), stepLevelGain (skankPattern().getLevel (skankStep)),
-                             skankSawMixCurve().sample (fraction));
+                             skankSawMixCurve().sample (fraction), decayOverride);
     }
 }
 
@@ -128,10 +140,21 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
         kick.trigger (0, stepLevelGain (StepLevel::Normal));
 
     if (manualBassTriggerRequested.exchange (false))
-        bass.trigger (0, stepLevelGain (StepLevel::Normal));
+    {
+        // manual Trigger button should sound like the sequenced note
+        // would - same section-level override resolution as advanceStep
+        const auto& gp = globalPatterns[(size_t) currentGlobalPatternSlot.load()];
+        float driveOverride = gp.bassDriveOverride.active.load() ? gp.bassDriveOverride.value.load() : -1.0f;
+        float cutoffOverride = gp.bassCutoffOverride.active.load() ? gp.bassCutoffOverride.value.load() : -1.0f;
+        bass.trigger (0, stepLevelGain (StepLevel::Normal), driveOverride, cutoffOverride);
+    }
 
     if (manualSkankTriggerRequested.exchange (false))
-        skank.triggerChord (0, stepLevelGain (StepLevel::Normal));
+    {
+        const auto& gp = globalPatterns[(size_t) currentGlobalPatternSlot.load()];
+        float decayOverride = gp.skankDecayOverride.active.load() ? gp.skankDecayOverride.value.load() : -1.0f;
+        skank.triggerChord (0, stepLevelGain (StepLevel::Normal), -1.0f, decayOverride);
+    }
 
     auto* out = buffer.getWritePointer (0);
 

@@ -18,7 +18,7 @@ void SkankSynth::resetToDefaults()
     volume.store (1.0f);
 }
 
-void SkankSynth::triggerChord (int semitoneOffset, float levelGain, float sawMixOverride)
+void SkankSynth::triggerChord (int semitoneOffset, float levelGain, float sawMixOverride, float decayOverride)
 {
     active = true;
     t = 0.0;
@@ -34,7 +34,8 @@ void SkankSynth::triggerChord (int semitoneOffset, float levelGain, float sawMix
     voices[2].phase = 0.0;
     voices[2].freq = root * std::pow (2.0, 7.0 / 12.0);
 
-    decayTau = juce::jmax (0.02, (double) decayMs.load() / 1000.0);
+    float decayKnob = (decayOverride >= 0.0f) ? decayOverride : decayMs.load();
+    decayTau = juce::jmax (0.02, (double) decayKnob / 1000.0);
     driveAmt = (double) drive.load();
     sawMixAmt = (sawMixOverride >= 0.0f) ? (double) sawMixOverride : (double) sawMix.load();
     triggerGain = (double) levelGain;

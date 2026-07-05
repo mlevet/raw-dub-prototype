@@ -31,7 +31,6 @@ target_sources(RawDubPrototype PRIVATE
     Source/SkankPatternSlot.h
     Source/StepPattern.h
     Source/StepLevel.h
-    Source/Scale.h
     Source/StepButton.h
     Source/StepButton.cpp
     Source/CurveLaneEditor.h

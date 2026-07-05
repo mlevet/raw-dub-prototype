@@ -152,6 +152,21 @@ public:
         count.store (2);
     }
 
+    // For "Make Unique" (see project_raw_dub_song_architecture memory) -
+    // vectors of atomics can't be copy-assigned via a plain `=`, so an
+    // explicit field-by-field copy is needed to fork one pattern's curve
+    // into another.
+    void copyFrom (const PointCurve& other)
+    {
+        int n = other.count.load();
+        for (int i = 0; i < n; ++i)
+        {
+            pos[(size_t) i].store (other.pos[(size_t) i].load());
+            val[(size_t) i].store (other.val[(size_t) i].load());
+        }
+        count.store (n);
+    }
+
 private:
     std::vector<std::atomic<float>> pos;
     std::vector<std::atomic<float>> val;

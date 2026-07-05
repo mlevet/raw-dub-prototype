@@ -6,6 +6,7 @@
 #include "CurveLaneEditor.h"
 #include "ProjectIO.h"
 #include <array>
+#include <vector>
 
 class MainComponent : public juce::AudioAppComponent, private juce::Timer
 {
@@ -25,7 +26,6 @@ private:
     void refreshStepColours();
     void refreshGlobalPatternButtons();
     void updatePlayButtonText();
-    void setAccentStyle (int style);
     void refreshParamSlidersFromEngine();
 
     // shared between Kick and Bass: changing length resets the view to
@@ -70,19 +70,32 @@ private:
     std::array<juce::TextButton, RawDub::AudioEngine::globalPatternBankSize> globalPatternButtons;
     juce::TextButton saveGlobalPatternButton { "Save" };
     juce::TextButton duplicateGlobalPatternButton { "Duplicate" };
-    int currentGlobalPatternSlot = 0; // always valid, defaults to Pattern 1
-
-    // prototype-only: comparing accent visual treatments, remove once decided
-    juce::Label accentStyleLabel { {}, "Accent style (prototype)" };
-    juce::TextButton accentStyleAButton { "A" };
-    juce::TextButton accentStyleBButton { "B" };
-    juce::TextButton accentStyleCButton { "C" };
+    // "current slot" itself now lives on AudioEngine (see
+    // getCurrentGlobalPatternSlot/setCurrentGlobalPatternSlot) - it
+    // determines which section's voicing overrides apply during
+    // playback, not just which button is highlighted, so the engine is
+    // the single source of truth rather than MainComponent keeping its
+    // own copy.
 
     struct ParamRow
     {
         juce::Label label;
         juce::Slider slider;
     };
+
+    // Only one instrument's section is shown at a time - the others are
+    // hidden entirely rather than stacked/scrolled. Each instrument's
+    // full set of components is collected into one of these vectors
+    // (populated once, in the constructor) so switching tabs is just
+    // "hide these, show those" instead of touching every component
+    // individually inline. currentInstrumentTab: 0=Kick, 1=Bass, 2=Skank.
+    void switchInstrumentTab (int tab);
+    void layoutKickSection (juce::Rectangle<int> area);
+    void layoutBassSection (juce::Rectangle<int> area);
+    void layoutSkankSection (juce::Rectangle<int> area);
+    int currentInstrumentTab = 0;
+    std::array<juce::TextButton, 3> instrumentTabButtons; // Kick / Bass / Skank
+    std::vector<juce::Component*> kickComponents, bassComponents, skankComponents;
 
     // Kick - length selectable 4/16/32/64, shown/edited 16 steps per page,
     // same paging mechanism as Bass.
@@ -103,6 +116,16 @@ private:
     juce::Label kickPatternBankLabel { {}, "Pattern" };
     std::array<juce::TextButton, RawDub::AudioEngine::bankSize> kickPatternBankButtons;
 
+    // "Make Unique" - see AudioEngine::makeKickPatternUnique and
+    // project_raw_dub_song_architecture memory (shared instrument
+    // pattern lifecycle). Sharing across Global Patterns is normal and
+    // often wanted; this pair only becomes visible when the current
+    // Kick pattern is actually referenced by more than one, so editing
+    // in the common (unshared) case stays exactly as frictionless as
+    // before this existed.
+    juce::Label kickSharedLabel;
+    juce::TextButton kickMakeUniqueButton { "Make Unique" };
+
     // Bass - same idea, length selectable 4/16/32/64.
     juce::TextButton bassTriggerButton { "Trigger" };
     juce::TextButton bassClearButton { "Clear" };
@@ -117,12 +140,30 @@ private:
     juce::Label bassPatternBankLabel { {}, "Pattern" };
     std::array<juce::TextButton, RawDub::AudioEngine::bankSize> bassPatternBankButtons;
 
+    // "Make Unique" - see kickSharedLabel above for the full explanation
+    juce::Label bassSharedLabel;
+    juce::TextButton bassMakeUniqueButton { "Make Unique" };
+
     // research switch, not permanent UI - see BassSynth::useAMMode.
     // Ratio deliberately discrete (not a slider) - only simple integer
     // ratios keep AM mode harmonic instead of gong-like.
     juce::TextButton bassHarmonicModeButton { "Harmonic: Drive" };
     juce::Label bassAmRatioLabel { {}, "AM Ratio" };
     std::array<juce::TextButton, 3> bassAmRatioButtons; // 1:1, 2:1, 3:1
+
+    // Section-level voicing overrides for Drive/Cutoff - see
+    // AudioEngine::ParamOverride and project_raw_dub_song_architecture
+    // memory. Off: the Drive/Cutoff slider edits the instrument's base
+    // value (bass.drive/cutoffHz), same as every other param. On: the
+    // slider instead edits the CURRENT Global Pattern's override, base
+    // left untouched - so the same Bass pattern can voice differently
+    // per section without ever touching every pattern that shares it.
+    // Deliberately just these two params for now, not a generic
+    // per-param mechanism - Volume stays global (a future mixer/
+    // performance concern, not this voicing pass).
+    juce::TextButton bassDriveOverrideButton { "Override" };
+    juce::TextButton bassCutoffOverrideButton { "Override" };
+    void refreshBassOverrideControls();
 
     int kickPlayheadStep = -1;
     int bassPlayheadStep = -1;
@@ -147,6 +188,19 @@ private:
 
     juce::Label skankPatternBankLabel { {}, "Pattern" };
     std::array<juce::TextButton, RawDub::AudioEngine::bankSize> skankPatternBankButtons;
+
+    // "Make Unique" - see kickSharedLabel above for the full explanation
+    juce::Label skankSharedLabel;
+    juce::TextButton skankMakeUniqueButton { "Make Unique" };
+    void refreshPatternSharingIndicators();
+
+    // Section-level voicing override for Decay - same idea as Bass's
+    // Drive/Cutoff overrides (see bassDriveOverrideButton). SawMix
+    // deliberately doesn't get one of these: it's already always a
+    // curve (see skankSawMixLaneEditor below), and a fixed "override"
+    // is just a flat curve - no separate mechanism needed for it.
+    juce::TextButton skankDecayOverrideButton { "Override" };
+    void refreshSkankOverrideControls();
 
     // sparse draggable-point SawMix curve - see CurveLaneEditor.h and
     // PointCurve (lives in the current Skank pattern slot, via

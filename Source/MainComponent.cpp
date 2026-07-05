@@ -94,7 +94,7 @@ MainComponent::MainComponent()
                     kickViewPage = 0;
                     bassViewPage = 0;
                     skankViewPage = 0;
-                    currentGlobalPatternSlot = 0;
+                    engine.setCurrentGlobalPatternSlot (0);
                     tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
                     refreshParamSlidersFromEngine();
                     refreshStepColours();
@@ -119,7 +119,7 @@ MainComponent::MainComponent()
                 kickViewPage = 0;
                 bassViewPage = 0;
                 skankViewPage = 0;
-                currentGlobalPatternSlot = 0;
+                engine.setCurrentGlobalPatternSlot (0);
                 tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
                 refreshParamSlidersFromEngine();
                 refreshStepColours();
@@ -136,7 +136,7 @@ MainComponent::MainComponent()
     // project_raw_dub_song_architecture memory).
     auto recallGlobalPatternUI = [this] (int slot)
     {
-        currentGlobalPatternSlot = slot;
+        engine.setCurrentGlobalPatternSlot (slot);
         if (engine.recallGlobalPattern (slot))
         {
             kickViewPage = 0;
@@ -147,6 +147,9 @@ MainComponent::MainComponent()
             skankSawMixLaneEditor.repaint();
             resized();
         }
+        refreshBassOverrideControls(); // different section, possibly different override state
+        refreshSkankOverrideControls();
+        refreshPatternSharingIndicators();
         refreshGlobalPatternButtons();
     };
 
@@ -163,7 +166,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (saveGlobalPatternButton);
     saveGlobalPatternButton.onClick = [this]
     {
-        engine.saveCurrentAsGlobalPattern (currentGlobalPatternSlot);
+        engine.saveCurrentAsGlobalPattern (engine.getCurrentGlobalPatternSlot());
         refreshGlobalPatternButtons();
     };
 
@@ -173,23 +176,36 @@ MainComponent::MainComponent()
         // branches off into the next free slot with whatever's
         // currently live, and switches editing there - doesn't touch
         // the instruments (they're already exactly what's being
-        // duplicated) or the pattern it branched from
-        int freeSlot = engine.findFirstEmptyGlobalPatternSlot();
+        // duplicated) or the pattern it branched from. Any active
+        // override on the source pattern carries over too - it's part
+        // of what's currently live (the slider shows it), so the
+        // duplicate should actually sound like what you branched from.
+        int sourceSlot = engine.getCurrentGlobalPatternSlot();
+        int freeSlot = engine.findFirstEmptyGlobalPatternSlot (sourceSlot);
         if (freeSlot < 0)
             return; // bank full - nothing to duplicate into
 
         engine.saveCurrentAsGlobalPattern (freeSlot);
-        currentGlobalPatternSlot = freeSlot;
+        engine.copySectionVoicingOverrides (sourceSlot, freeSlot);
+        engine.setCurrentGlobalPatternSlot (freeSlot);
+        refreshBassOverrideControls();
+        refreshSkankOverrideControls();
+        refreshPatternSharingIndicators();
         refreshGlobalPatternButtons();
     };
 
-    // --- prototype-only accent style switcher ---
-    addAndMakeVisible (accentStyleLabel);
-    for (auto* btn : { &accentStyleAButton, &accentStyleBButton, &accentStyleCButton })
-        addAndMakeVisible (*btn);
-    accentStyleAButton.onClick = [this] { setAccentStyle (0); };
-    accentStyleBButton.onClick = [this] { setAccentStyle (1); };
-    accentStyleCButton.onClick = [this] { setAccentStyle (2); };
+    // --- Instrument tabs: only one instrument's section is shown at a
+    // time, not all three stacked/scrolled ---
+    {
+        const char* names[3] = { "Kick", "Bass", "Skank" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto& btn = instrumentTabButtons[(size_t) i];
+            btn.setButtonText (names[i]);
+            addAndMakeVisible (btn);
+            btn.onClick = [this, i] { switchInstrumentTab (i); };
+        }
+    }
 
     // --- Kick ---
     addAndMakeVisible (kickTriggerButton);
@@ -252,9 +268,19 @@ MainComponent::MainComponent()
             engine.setCurrentKickPatternIndex (i);
             kickViewPage = 0;
             refreshStepColours();
+            refreshPatternSharingIndicators();
             resized();
         };
     }
+
+    addAndMakeVisible (kickSharedLabel);
+    addAndMakeVisible (kickMakeUniqueButton);
+    kickMakeUniqueButton.onClick = [this]
+    {
+        engine.makeKickPatternUnique();
+        refreshPatternSharingIndicators();
+        refreshGlobalPatternButtons();
+    };
 
     addAndMakeVisible (kickTitleLabel);
     kickTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
@@ -350,9 +376,19 @@ MainComponent::MainComponent()
             engine.setCurrentBassPatternIndex (i);
             bassViewPage = 0;
             refreshStepColours();
+            refreshPatternSharingIndicators();
             resized();
         };
     }
+
+    addAndMakeVisible (bassSharedLabel);
+    addAndMakeVisible (bassMakeUniqueButton);
+    bassMakeUniqueButton.onClick = [this]
+    {
+        engine.makeBassPatternUnique();
+        refreshPatternSharingIndicators();
+        refreshGlobalPatternButtons();
+    };
 
     addAndMakeVisible (bassTitleLabel);
     bassTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
@@ -419,6 +455,51 @@ MainComponent::MainComponent()
             auto* slider = &row.slider;
             row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
         }
+
+        // Drive/Cutoff get overridden below to be override-aware instead
+        // of always writing straight to the base atomic - see
+        // bassDriveOverrideButton/bassCutoffOverrideButton.
+        addAndMakeVisible (bassDriveOverrideButton);
+        bassDriveOverrideButton.onClick = [this]
+        {
+            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+            bool newActive = ! gp.bassDriveOverride.active.load();
+            // seed with the current base value so turning an override on
+            // never silently jumps the sound - it starts as a no-op
+            if (newActive)
+                gp.bassDriveOverride.value.store (engine.bass.drive.load());
+            gp.bassDriveOverride.active.store (newActive);
+            refreshBassOverrideControls();
+        };
+        bassParamRows[1].slider.onValueChange = [this]
+        {
+            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+            float v = (float) bassParamRows[1].slider.getValue();
+            if (gp.bassDriveOverride.active.load())
+                gp.bassDriveOverride.value.store (v);
+            else
+                engine.bass.drive.store (v);
+        };
+
+        addAndMakeVisible (bassCutoffOverrideButton);
+        bassCutoffOverrideButton.onClick = [this]
+        {
+            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+            bool newActive = ! gp.bassCutoffOverride.active.load();
+            if (newActive)
+                gp.bassCutoffOverride.value.store (engine.bass.cutoffHz.load());
+            gp.bassCutoffOverride.active.store (newActive);
+            refreshBassOverrideControls();
+        };
+        bassParamRows[2].slider.onValueChange = [this]
+        {
+            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+            float v = (float) bassParamRows[2].slider.getValue();
+            if (gp.bassCutoffOverride.active.load())
+                gp.bassCutoffOverride.value.store (v);
+            else
+                engine.bass.cutoffHz.store (v);
+        };
     }
 
     // --- Skank (sequenced, see SkankSynth.h) ---
@@ -493,11 +574,23 @@ MainComponent::MainComponent()
             engine.setCurrentSkankPatternIndex (i);
             skankViewPage = 0;
             refreshStepColours();
+            refreshPatternSharingIndicators();
             skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
             skankSawMixLaneEditor.repaint();
             resized();
         };
     }
+
+    addAndMakeVisible (skankSharedLabel);
+    addAndMakeVisible (skankMakeUniqueButton);
+    skankMakeUniqueButton.onClick = [this]
+    {
+        engine.makeSkankPatternUnique();
+        refreshPatternSharingIndicators();
+        skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
+        skankSawMixLaneEditor.repaint();
+        refreshGlobalPatternButtons();
+    };
 
     addAndMakeVisible (skankMajorButton);
     addAndMakeVisible (skankMinorButton);
@@ -548,6 +641,27 @@ MainComponent::MainComponent()
             engine.skankSawMixCurve().resetToValue (v);
             skankSawMixLaneEditor.repaint();
         };
+
+        // Decay gets the same section-level override as Bass Drive/Cutoff
+        addAndMakeVisible (skankDecayOverrideButton);
+        skankDecayOverrideButton.onClick = [this]
+        {
+            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+            bool newActive = ! gp.skankDecayOverride.active.load();
+            if (newActive)
+                gp.skankDecayOverride.value.store (engine.skank.decayMs.load());
+            gp.skankDecayOverride.active.store (newActive);
+            refreshSkankOverrideControls();
+        };
+        skankParamRows[2].slider.onValueChange = [this]
+        {
+            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+            float v = (float) skankParamRows[2].slider.getValue();
+            if (gp.skankDecayOverride.active.load())
+                gp.skankDecayOverride.value.store (v);
+            else
+                engine.skank.decayMs.store (v);
+        };
     }
 
     addAndMakeVisible (skankSawMixLaneLabel);
@@ -561,12 +675,65 @@ MainComponent::MainComponent()
     skankSawMixLaneEditor.onAddPoint = [this] (float p, float v) { return engine.skankSawMixCurve().insertPoint (p, v); };
     skankSawMixLaneEditor.onRemovePoint = [this] (int i) { engine.skankSawMixCurve().removePoint (i); };
 
+    // --- component groups for the instrument tabs (see switchInstrumentTab) ---
+    kickComponents = { &kickTriggerButton, &kickClearButton, &kickTitleLabel, &kickLengthLabel, &kickPatternBankLabel,
+                        &kickSharedLabel, &kickMakeUniqueButton };
+    for (auto& btn : kickStepButtons) kickComponents.push_back (&btn);
+    for (auto& row : kickParamRows) { kickComponents.push_back (&row.label); kickComponents.push_back (&row.slider); }
+    for (auto& btn : kickLengthButtons) kickComponents.push_back (&btn);
+    for (auto& btn : kickPageButtons) kickComponents.push_back (&btn);
+    for (auto& btn : kickPatternBankButtons) kickComponents.push_back (&btn);
+
+    bassComponents = { &bassTriggerButton, &bassClearButton, &bassTitleLabel, &bassLengthLabel, &bassPatternBankLabel,
+                        &bassHarmonicModeButton, &bassAmRatioLabel, &bassDriveOverrideButton, &bassCutoffOverrideButton,
+                        &bassSharedLabel, &bassMakeUniqueButton };
+    for (auto& btn : bassStepButtons) bassComponents.push_back (&btn);
+    for (auto& row : bassParamRows) { bassComponents.push_back (&row.label); bassComponents.push_back (&row.slider); }
+    for (auto& btn : bassLengthButtons) bassComponents.push_back (&btn);
+    for (auto& btn : bassPageButtons) bassComponents.push_back (&btn);
+    for (auto& btn : bassPatternBankButtons) bassComponents.push_back (&btn);
+    for (auto& btn : bassAmRatioButtons) bassComponents.push_back (&btn);
+
+    skankComponents = { &skankTriggerButton, &skankClearButton, &skankTitleLabel, &skankMajorButton, &skankMinorButton,
+                         &skankLengthLabel, &skankPatternBankLabel, &skankSawMixLaneLabel, &skankSawMixLaneEditor,
+                         &skankDecayOverrideButton, &skankSharedLabel, &skankMakeUniqueButton };
+    for (auto& btn : skankStepButtons) skankComponents.push_back (&btn);
+    for (auto& row : skankParamRows) { skankComponents.push_back (&row.label); skankComponents.push_back (&row.slider); }
+    for (auto& btn : skankLengthButtons) skankComponents.push_back (&btn);
+    for (auto& btn : skankPageButtons) skankComponents.push_back (&btn);
+    for (auto& btn : skankPatternBankButtons) skankComponents.push_back (&btn);
+
+    switchInstrumentTab (0);
+
     refreshStepColours();
     updatePlayButtonText();
 
     setAudioChannels (0, 2);
-    setSize (820, 2110);
+    setSize (820, 900);
     startTimerHz (30);
+}
+
+void MainComponent::switchInstrumentTab (int tab)
+{
+    currentInstrumentTab = tab;
+
+    for (auto* c : kickComponents)  c->setVisible (tab == 0);
+    for (auto* c : bassComponents)  c->setVisible (tab == 1);
+    for (auto* c : skankComponents) c->setVisible (tab == 2);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        bool isActive = (i == tab);
+        instrumentTabButtons[(size_t) i].setColour (juce::TextButton::buttonColourId, isActive ? juce::Colours::black : juce::Colours::white);
+        instrumentTabButtons[(size_t) i].setColour (juce::TextButton::textColourOffId, isActive ? juce::Colours::white : juce::Colours::black);
+    }
+
+    resized();
+    refreshStepColours();
+    // sharing indicators have their own conditional visibility (only
+    // shown when actually shared) that the blanket show/hide above
+    // doesn't know about - re-correct it now
+    refreshPatternSharingIndicators();
 }
 
 MainComponent::~MainComponent()
@@ -648,19 +815,30 @@ void MainComponent::resized()
     globalPatternsRow.removeFromLeft (6);
     duplicateGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (90));
 
-    area.removeFromTop (12);
-
-    auto accentRow = area.removeFromTop (28);
-    accentStyleLabel.setBounds (accentRow.removeFromLeft (200));
-    accentStyleAButton.setBounds (accentRow.removeFromLeft (40));
-    accentRow.removeFromLeft (6);
-    accentStyleBButton.setBounds (accentRow.removeFromLeft (40));
-    accentRow.removeFromLeft (6);
-    accentStyleCButton.setBounds (accentRow.removeFromLeft (40));
-
     area.removeFromTop (20);
 
-    // --- Kick section ---
+    auto tabsRow = area.removeFromTop (32);
+    instrumentTabButtons[0].setBounds (tabsRow.removeFromLeft (100));
+    tabsRow.removeFromLeft (6);
+    instrumentTabButtons[1].setBounds (tabsRow.removeFromLeft (100));
+    tabsRow.removeFromLeft (6);
+    instrumentTabButtons[2].setBounds (tabsRow.removeFromLeft (100));
+
+    area.removeFromTop (16);
+
+    // Only the active instrument's section is shown - each starts from
+    // the same area rather than stacking, so switching tabs doesn't
+    // require scrolling to reach whichever one is now visible.
+    if (currentInstrumentTab == 0)
+        layoutKickSection (area);
+    else if (currentInstrumentTab == 1)
+        layoutBassSection (area);
+    else
+        layoutSkankSection (area);
+}
+
+void MainComponent::layoutKickSection (juce::Rectangle<int> area)
+{
     auto kickHeader = area.removeFromTop (28);
     kickTitleLabel.setBounds (kickHeader.removeFromLeft (200));
     kickTriggerButton.setBounds (kickHeader.removeFromLeft (90));
@@ -694,6 +872,9 @@ void MainComponent::resized()
         btn.setBounds (kickPatternBankRow.removeFromLeft (32));
         kickPatternBankRow.removeFromLeft (4);
     }
+    kickPatternBankRow.removeFromLeft (10);
+    kickSharedLabel.setBounds (kickPatternBankRow.removeFromLeft (150));
+    kickMakeUniqueButton.setBounds (kickPatternBankRow.removeFromLeft (100));
 
     area.removeFromTop (8);
 
@@ -709,10 +890,10 @@ void MainComponent::resized()
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
+}
 
-    area.removeFromTop (24);
-
-    // --- Bass section ---
+void MainComponent::layoutBassSection (juce::Rectangle<int> area)
+{
     auto bassHeader = area.removeFromTop (28);
     bassTitleLabel.setBounds (bassHeader.removeFromLeft (200));
     bassTriggerButton.setBounds (bassHeader.removeFromLeft (90));
@@ -748,6 +929,9 @@ void MainComponent::resized()
         btn.setBounds (bassPatternBankRow.removeFromLeft (32));
         bassPatternBankRow.removeFromLeft (4);
     }
+    bassPatternBankRow.removeFromLeft (10);
+    bassSharedLabel.setBounds (bassPatternBankRow.removeFromLeft (150));
+    bassMakeUniqueButton.setBounds (bassPatternBankRow.removeFromLeft (100));
 
     area.removeFromTop (8);
 
@@ -770,17 +954,26 @@ void MainComponent::resized()
 
     area.removeFromTop (10);
 
-    for (auto& row : bassParamRows)
+    for (int i = 0; i < (int) bassParamRows.size(); ++i)
     {
+        auto& row = bassParamRows[(size_t) i];
         auto rowArea = area.removeFromTop (36);
         row.label.setBounds (rowArea.removeFromLeft (70));
+
+        // Drive (1) and Cutoff (2) reserve room on the right for their
+        // section-level override toggle - see bassDriveOverrideButton
+        if (i == 1)
+            bassDriveOverrideButton.setBounds (rowArea.removeFromRight (80));
+        else if (i == 2)
+            bassCutoffOverrideButton.setBounds (rowArea.removeFromRight (80));
+
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
+}
 
-    area.removeFromTop (24);
-
-    // --- Skank ---
+void MainComponent::layoutSkankSection (juce::Rectangle<int> area)
+{
     auto skankHeader = area.removeFromTop (28);
     skankTitleLabel.setBounds (skankHeader.removeFromLeft (150));
     skankTriggerButton.setBounds (skankHeader.removeFromLeft (90));
@@ -814,6 +1007,9 @@ void MainComponent::resized()
         btn.setBounds (skankPatternBankRow.removeFromLeft (32));
         skankPatternBankRow.removeFromLeft (4);
     }
+    skankPatternBankRow.removeFromLeft (10);
+    skankSharedLabel.setBounds (skankPatternBankRow.removeFromLeft (150));
+    skankMakeUniqueButton.setBounds (skankPatternBankRow.removeFromLeft (100));
 
     area.removeFromTop (8);
 
@@ -829,10 +1025,16 @@ void MainComponent::resized()
 
     area.removeFromTop (8);
 
-    for (auto& row : skankParamRows)
+    for (int i = 0; i < (int) skankParamRows.size(); ++i)
     {
+        auto& row = skankParamRows[(size_t) i];
         auto rowArea = area.removeFromTop (36);
         row.label.setBounds (rowArea.removeFromLeft (70));
+
+        // Decay (2) reserves room for its section-level override toggle
+        if (i == 2)
+            skankDecayOverrideButton.setBounds (rowArea.removeFromRight (80));
+
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
@@ -975,7 +1177,7 @@ void MainComponent::refreshGlobalPatternButtons()
     for (int i = 0; i < RawDub::AudioEngine::globalPatternBankSize; ++i)
     {
         auto& btn = globalPatternButtons[(size_t) i];
-        bool isCurrent = (i == currentGlobalPatternSlot);
+        bool isCurrent = (i == engine.getCurrentGlobalPatternSlot());
         bool isUsed = engine.isGlobalPatternUsed (i);
 
         auto bg = isCurrent ? juce::Colours::black : juce::Colours::white;
@@ -991,16 +1193,6 @@ void MainComponent::updatePlayButtonText()
     playStopButton.setButtonText (engine.isPlaying() ? "Stop" : "Play");
 }
 
-void MainComponent::setAccentStyle (int style)
-{
-    for (auto& btn : kickStepButtons)
-        btn.setAccentStyle (style);
-    for (auto& btn : bassStepButtons)
-        btn.setAccentStyle (style);
-    for (auto& btn : skankStepButtons)
-        btn.setAccentStyle (style);
-}
-
 // order must match the ParamSpec arrays set up in the constructor -
 // Kick: Tune/Punch/Decay/Drive/Volume, Bass: Tune/Drive/Cutoff/Resonance/Length/AM Depth/Volume
 void MainComponent::refreshParamSlidersFromEngine()
@@ -1012,12 +1204,14 @@ void MainComponent::refreshParamSlidersFromEngine()
     kickParamRows[4].slider.setValue ((double) engine.kick.volume.load(),  juce::dontSendNotification);
 
     bassParamRows[0].slider.setValue ((double) engine.bass.tuneHz.load(),    juce::dontSendNotification);
-    bassParamRows[1].slider.setValue ((double) engine.bass.drive.load(),     juce::dontSendNotification);
-    bassParamRows[2].slider.setValue ((double) engine.bass.cutoffHz.load(),  juce::dontSendNotification);
+    // Drive/Cutoff (rows 1-2) are handled by refreshBassOverrideControls()
+    // below instead - they show the current Global Pattern's override
+    // value when one is active, not always the base value.
     bassParamRows[3].slider.setValue ((double) engine.bass.resonance.load(), juce::dontSendNotification);
     bassParamRows[4].slider.setValue ((double) engine.bass.decayMs.load(),   juce::dontSendNotification);
     bassParamRows[5].slider.setValue ((double) engine.bass.amDepth.load(),   juce::dontSendNotification);
     bassParamRows[6].slider.setValue ((double) engine.bass.volume.load(),    juce::dontSendNotification);
+    refreshBassOverrideControls();
 
     bool useAM = engine.bass.useAMMode.load();
     bassHarmonicModeButton.setButtonText (useAM ? "Harmonic: AM" : "Harmonic: Drive");
@@ -1028,13 +1222,90 @@ void MainComponent::refreshParamSlidersFromEngine()
 
     skankParamRows[0].slider.setValue ((double) engine.skank.tuneHz.load(),  juce::dontSendNotification);
     skankParamRows[1].slider.setValue ((double) engine.skank.sawMix.load(),  juce::dontSendNotification);
-    skankParamRows[2].slider.setValue ((double) engine.skank.decayMs.load(), juce::dontSendNotification);
+    // Decay (row 2) is handled by refreshSkankOverrideControls() below
+    // instead - shows the current Global Pattern's override when active.
     skankParamRows[3].slider.setValue ((double) engine.skank.drive.load(),   juce::dontSendNotification);
     skankParamRows[4].slider.setValue ((double) engine.skank.volume.load(),  juce::dontSendNotification);
+    refreshSkankOverrideControls();
+    refreshPatternSharingIndicators();
     bool isMinor = engine.skank.minorChord.load();
     skankMajorButton.setToggleState (! isMinor, juce::dontSendNotification);
     skankMinorButton.setToggleState (isMinor, juce::dontSendNotification);
     skankSawMixLaneEditor.repaint();
+}
+
+// Drive/Cutoff show whichever value is actually in effect for the
+// current Global Pattern (override if active, base otherwise), and the
+// two toggle buttons reflect whether that pattern has one active - see
+// AudioEngine::ParamOverride and project_raw_dub_song_architecture memory.
+void MainComponent::refreshBassOverrideControls()
+{
+    auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+
+    bool driveActive = gp.bassDriveOverride.active.load();
+    bassDriveOverrideButton.setColour (juce::TextButton::buttonColourId, driveActive ? juce::Colours::black : juce::Colours::white);
+    bassDriveOverrideButton.setColour (juce::TextButton::textColourOffId, driveActive ? juce::Colours::white : juce::Colours::black);
+    bassParamRows[1].slider.setValue (driveActive ? (double) gp.bassDriveOverride.value.load() : (double) engine.bass.drive.load(),
+                                       juce::dontSendNotification);
+
+    bool cutoffActive = gp.bassCutoffOverride.active.load();
+    bassCutoffOverrideButton.setColour (juce::TextButton::buttonColourId, cutoffActive ? juce::Colours::black : juce::Colours::white);
+    bassCutoffOverrideButton.setColour (juce::TextButton::textColourOffId, cutoffActive ? juce::Colours::white : juce::Colours::black);
+    bassParamRows[2].slider.setValue (cutoffActive ? (double) gp.bassCutoffOverride.value.load() : (double) engine.bass.cutoffHz.load(),
+                                       juce::dontSendNotification);
+}
+
+// same idea as refreshBassOverrideControls, for Skank's Decay override
+void MainComponent::refreshSkankOverrideControls()
+{
+    auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+
+    bool decayActive = gp.skankDecayOverride.active.load();
+    skankDecayOverrideButton.setColour (juce::TextButton::buttonColourId, decayActive ? juce::Colours::black : juce::Colours::white);
+    skankDecayOverrideButton.setColour (juce::TextButton::textColourOffId, decayActive ? juce::Colours::white : juce::Colours::black);
+    skankParamRows[2].slider.setValue (decayActive ? (double) gp.skankDecayOverride.value.load() : (double) engine.skank.decayMs.load(),
+                                        juce::dontSendNotification);
+}
+
+// "Make Unique" indicators - see AudioEngine::globalPatternsReferencingKick
+// etc and project_raw_dub_song_architecture memory. Only shown when the
+// current pattern is referenced by more than one Global Pattern - sharing
+// by exactly one (or zero, e.g. never saved anywhere) isn't "shared" in
+// any way that needs surfacing, editing in place is already safe.
+void MainComponent::refreshPatternSharingIndicators()
+{
+    auto formatSharedWith = [] (const std::vector<int>& slots) -> juce::String
+    {
+        juce::String s = "Also in: ";
+        for (size_t i = 0; i < slots.size(); ++i)
+        {
+            if (i > 0)
+                s << ", ";
+            s << slots[i];
+        }
+        return s;
+    };
+
+    auto kickRefs = engine.globalPatternsReferencingKick (engine.getCurrentKickPatternIndex());
+    bool kickShared = kickRefs.size() > 1;
+    kickSharedLabel.setVisible (kickShared);
+    kickMakeUniqueButton.setVisible (kickShared);
+    if (kickShared)
+        kickSharedLabel.setText (formatSharedWith (kickRefs), juce::dontSendNotification);
+
+    auto bassRefs = engine.globalPatternsReferencingBass (engine.getCurrentBassPatternIndex());
+    bool bassShared = bassRefs.size() > 1;
+    bassSharedLabel.setVisible (bassShared);
+    bassMakeUniqueButton.setVisible (bassShared);
+    if (bassShared)
+        bassSharedLabel.setText (formatSharedWith (bassRefs), juce::dontSendNotification);
+
+    auto skankRefs = engine.globalPatternsReferencingSkank (engine.getCurrentSkankPatternIndex());
+    bool skankShared = skankRefs.size() > 1;
+    skankSharedLabel.setVisible (skankShared);
+    skankMakeUniqueButton.setVisible (skankShared);
+    if (skankShared)
+        skankSharedLabel.setText (formatSharedWith (skankRefs), juce::dontSendNotification);
 }
 
 void MainComponent::setVoiceLength (RawDub::StepPattern& pattern, int newLength, int& viewPage)

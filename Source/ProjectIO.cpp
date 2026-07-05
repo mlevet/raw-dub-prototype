@@ -173,22 +173,32 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     root->setProperty ("skank", juce::var (skankObj));
 
     // Global Patterns - see project_raw_dub_song_architecture memory.
-    // No musical data, just three saved indices per slot.
+    // No musical data, just three saved indices per slot, plus optional
+    // section-level voicing overrides (Bass Drive/Cutoff - see
+    // AudioEngine::ParamOverride). Overrides are independent of "used"
+    // (edited through their own controls, not created by Save), so they
+    // serialize regardless of whether the slot has a saved combination.
     juce::Array<juce::var> globalPatternsArr;
     for (int i = 0; i < AudioEngine::globalPatternBankSize; ++i)
     {
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("used", engine.isGlobalPatternUsed (i));
+        // recall into a scratch state would be needed to read these
+        // back out cleanly, but the struct is a simple public
+        // aggregate on AudioEngine, so read it directly instead
+        const auto& gp = engine.globalPatterns[(size_t) i];
         if (engine.isGlobalPatternUsed (i))
         {
-            // recall into a scratch state would be needed to read these
-            // back out cleanly, but the struct is a simple public
-            // aggregate on AudioEngine, so read it directly instead
-            const auto& gp = engine.globalPatterns[(size_t) i];
             obj->setProperty ("kick", gp.kickIndex);
             obj->setProperty ("bass", gp.bassIndex);
             obj->setProperty ("skank", gp.skankIndex);
         }
+        obj->setProperty ("bassDriveOverrideActive", gp.bassDriveOverride.active.load());
+        obj->setProperty ("bassDriveOverrideValue", (double) gp.bassDriveOverride.value.load());
+        obj->setProperty ("bassCutoffOverrideActive", gp.bassCutoffOverride.active.load());
+        obj->setProperty ("bassCutoffOverrideValue", (double) gp.bassCutoffOverride.value.load());
+        obj->setProperty ("skankDecayOverrideActive", gp.skankDecayOverride.active.load());
+        obj->setProperty ("skankDecayOverrideValue", (double) gp.skankDecayOverride.value.load());
         globalPatternsArr.add (juce::var (obj));
     }
     root->setProperty ("globalPatterns", globalPatternsArr);
@@ -303,6 +313,13 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
             gp.kickIndex = (int) slotVar.getProperty ("kick", 0);
             gp.bassIndex = (int) slotVar.getProperty ("bass", 0);
             gp.skankIndex = (int) slotVar.getProperty ("skank", 0);
+            // absent entirely = legacy save from before overrides existed - defaults (no override) are already correct
+            gp.bassDriveOverride.active.store ((bool) slotVar.getProperty ("bassDriveOverrideActive", false));
+            gp.bassDriveOverride.value.store ((float) (double) slotVar.getProperty ("bassDriveOverrideValue", 0.0));
+            gp.bassCutoffOverride.active.store ((bool) slotVar.getProperty ("bassCutoffOverrideActive", false));
+            gp.bassCutoffOverride.value.store ((float) (double) slotVar.getProperty ("bassCutoffOverrideValue", 0.0));
+            gp.skankDecayOverride.active.store ((bool) slotVar.getProperty ("skankDecayOverrideActive", false));
+            gp.skankDecayOverride.value.store ((float) (double) slotVar.getProperty ("skankDecayOverrideValue", 0.0));
         }
     }
     // absent entirely = legacy save from before Global Patterns existed - leave all slots unused, nothing to migrate

@@ -21,26 +21,31 @@ void BassSynth::resetToDefaults()
     volume.store (1.0f);
 }
 
-void BassSynth::trigger (int semitoneOffset, float levelGain)
+void BassSynth::trigger (int semitoneOffset, float levelGain, float driveOverride, float cutoffOverride)
 {
     if (active)
     {
         // proper monophonic stop-then-start: don't touch anything yet,
         // just remember what the new note should be and start choking
         // the current one out. applyTrigger() runs once the choke
-        // actually finishes (see renderAdd).
+        // actually finishes (see renderAdd). The override values must be
+        // remembered too, not re-read from the current Global Pattern
+        // later - by the time the choke finishes, playback may have
+        // moved past the pattern this note actually belongs to.
         choking = true;
         chokeStartAmp = currentAmpEnv;
         chokeT = 0.0;
         pendingSemitoneOffset = semitoneOffset;
         pendingLevelGain = levelGain;
+        pendingDriveOverride = driveOverride;
+        pendingCutoffOverride = cutoffOverride;
         return;
     }
 
-    applyTrigger (semitoneOffset, levelGain);
+    applyTrigger (semitoneOffset, levelGain, driveOverride, cutoffOverride);
 }
 
-void BassSynth::applyTrigger (int semitoneOffset, float levelGain)
+void BassSynth::applyTrigger (int semitoneOffset, float levelGain, float driveOverride, float cutoffOverride)
 {
     active = true;
     choking = false;
@@ -53,12 +58,13 @@ void BassSynth::applyTrigger (int semitoneOffset, float levelGain)
     freq = (double) tuneHz.load() * std::pow (2.0, semitoneOffset / 12.0);
     holdSeconds = juce::jmax (0.02, (double) decayMs.load() / 1000.0);
     triggerGain = (double) levelGain;
-    driveAmt = (double) drive.load();
+    driveAmt = (driveOverride >= 0.0f) ? (double) driveOverride : (double) drive.load();
     amModeSnapshot = useAMMode.load();
     amRatioSnapshot = (double) amRatio.load();
     amDepthSnapshot = (double) amDepth.load();
 
-    double cutoff = (double) juce::jlimit (20.0f, (float) (sampleRate * 0.45), cutoffHz.load());
+    float cutoffKnob = (cutoffOverride >= 0.0f) ? cutoffOverride : cutoffHz.load();
+    double cutoff = (double) juce::jlimit (20.0f, (float) (sampleRate * 0.45), cutoffKnob);
     svfF = 2.0 * std::sin (juce::MathConstants<double>::pi * cutoff / sampleRate);
 
     double res = (double) juce::jlimit (0.0f, 0.95f, resonance.load());
@@ -147,7 +153,7 @@ void BassSynth::renderAdd (float* out, int numSamples)
 
             chokeT += dt;
             if (chokeT >= chokeTau)
-                applyTrigger (pendingSemitoneOffset, pendingLevelGain);
+                applyTrigger (pendingSemitoneOffset, pendingLevelGain, pendingDriveOverride, pendingCutoffOverride);
 
             continue;
         }

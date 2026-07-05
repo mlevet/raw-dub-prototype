@@ -16,5 +16,15 @@ struct SkankPatternSlot
 
     StepPattern steps;
     PointCurve sawMixCurve;
+
+    // For "Make Unique" - a curve alone (with no notes on) doesn't make
+    // a slot musically meaningful, so emptiness is judged purely by steps.
+    bool isEmpty() const { return steps.isEmpty(); }
+
+    void copyFrom (const SkankPatternSlot& other)
+    {
+        steps.copyFrom (other.steps);
+        sawMixCurve.copyFrom (other.sawMixCurve);
+    }
 };
 }

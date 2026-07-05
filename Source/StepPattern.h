@@ -82,6 +82,33 @@ public:
         return offsets[(size_t) step].load (std::memory_order_relaxed);
     }
 
+    // For "Make Unique" (see project_raw_dub_song_architecture memory) -
+    // no notes on means nothing musically distinguishes this slot, so
+    // it's safe to treat as an available fork destination even without
+    // an explicit "used" flag like Global Patterns have.
+    bool isEmpty() const
+    {
+        for (auto& s : on)
+            if (s.load (std::memory_order_relaxed))
+                return false;
+        return true;
+    }
+
+    // Vectors of atomics aren't copy-assignable via a plain `=` (same
+    // reason PointCurve needs an explicit move constructor - see
+    // PointCurve.h), so an explicit field-by-field copy is needed here
+    // too, for "Make Unique" forking one pattern's content into another.
+    void copyFrom (const StepPattern& other)
+    {
+        activeLength = other.activeLength;
+        for (size_t i = 0; i < (size_t) maxLength; ++i)
+        {
+            on[i].store (other.on[i].load (std::memory_order_relaxed), std::memory_order_relaxed);
+            levels[i].store (other.levels[i].load (std::memory_order_relaxed), std::memory_order_relaxed);
+            offsets[i].store (other.offsets[i].load (std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+    }
+
 private:
     int activeLength;
     std::vector<std::atomic<bool>> on;
