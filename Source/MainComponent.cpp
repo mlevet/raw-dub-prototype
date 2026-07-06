@@ -194,6 +194,15 @@ MainComponent::MainComponent()
         refreshGlobalPatternButtons();
     };
 
+    addAndMakeVisible (clearGlobalPatternButton);
+    clearGlobalPatternButton.onClick = [this]
+    {
+        engine.clearGlobalPattern (engine.getCurrentGlobalPatternSlot());
+        refreshBassOverrideControls();
+        refreshSkankOverrideControls();
+        refreshGlobalPatternButtons();
+    };
+
     // --- Instrument tabs: only one instrument's section is shown at a
     // time, not all three stacked/scrolled ---
     {
@@ -804,16 +813,18 @@ void MainComponent::resized()
     area.removeFromTop (12);
 
     auto globalPatternsRow = area.removeFromTop (28);
-    globalPatternsLabel.setBounds (globalPatternsRow.removeFromLeft (110));
+    globalPatternsLabel.setBounds (globalPatternsRow.removeFromLeft (90));
     for (auto& btn : globalPatternButtons)
     {
-        btn.setBounds (globalPatternsRow.removeFromLeft (36));
-        globalPatternsRow.removeFromLeft (4);
+        btn.setBounds (globalPatternsRow.removeFromLeft (24));
+        globalPatternsRow.removeFromLeft (2);
     }
-    globalPatternsRow.removeFromLeft (10);
-    saveGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (70));
-    globalPatternsRow.removeFromLeft (6);
-    duplicateGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (90));
+    globalPatternsRow.removeFromLeft (8);
+    saveGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (60));
+    globalPatternsRow.removeFromLeft (4);
+    duplicateGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (70));
+    globalPatternsRow.removeFromLeft (4);
+    clearGlobalPatternButton.setBounds (globalPatternsRow.removeFromLeft (50));
 
     area.removeFromTop (20);
 
@@ -866,15 +877,15 @@ void MainComponent::layoutKickSection (juce::Rectangle<int> area)
     area.removeFromTop (8);
 
     auto kickPatternBankRow = area.removeFromTop (28);
-    kickPatternBankLabel.setBounds (kickPatternBankRow.removeFromLeft (60));
+    kickPatternBankLabel.setBounds (kickPatternBankRow.removeFromLeft (50));
     for (auto& btn : kickPatternBankButtons)
     {
-        btn.setBounds (kickPatternBankRow.removeFromLeft (32));
-        kickPatternBankRow.removeFromLeft (4);
+        btn.setBounds (kickPatternBankRow.removeFromLeft (22));
+        kickPatternBankRow.removeFromLeft (2);
     }
-    kickPatternBankRow.removeFromLeft (10);
-    kickSharedLabel.setBounds (kickPatternBankRow.removeFromLeft (150));
-    kickMakeUniqueButton.setBounds (kickPatternBankRow.removeFromLeft (100));
+    kickPatternBankRow.removeFromLeft (8);
+    kickSharedLabel.setBounds (kickPatternBankRow.removeFromLeft (130));
+    kickMakeUniqueButton.setBounds (kickPatternBankRow.removeFromLeft (90));
 
     area.removeFromTop (8);
 
@@ -923,15 +934,15 @@ void MainComponent::layoutBassSection (juce::Rectangle<int> area)
     area.removeFromTop (8);
 
     auto bassPatternBankRow = area.removeFromTop (28);
-    bassPatternBankLabel.setBounds (bassPatternBankRow.removeFromLeft (60));
+    bassPatternBankLabel.setBounds (bassPatternBankRow.removeFromLeft (50));
     for (auto& btn : bassPatternBankButtons)
     {
-        btn.setBounds (bassPatternBankRow.removeFromLeft (32));
-        bassPatternBankRow.removeFromLeft (4);
+        btn.setBounds (bassPatternBankRow.removeFromLeft (22));
+        bassPatternBankRow.removeFromLeft (2);
     }
-    bassPatternBankRow.removeFromLeft (10);
-    bassSharedLabel.setBounds (bassPatternBankRow.removeFromLeft (150));
-    bassMakeUniqueButton.setBounds (bassPatternBankRow.removeFromLeft (100));
+    bassPatternBankRow.removeFromLeft (8);
+    bassSharedLabel.setBounds (bassPatternBankRow.removeFromLeft (130));
+    bassMakeUniqueButton.setBounds (bassPatternBankRow.removeFromLeft (90));
 
     area.removeFromTop (8);
 
@@ -1001,15 +1012,15 @@ void MainComponent::layoutSkankSection (juce::Rectangle<int> area)
     area.removeFromTop (8);
 
     auto skankPatternBankRow = area.removeFromTop (28);
-    skankPatternBankLabel.setBounds (skankPatternBankRow.removeFromLeft (60));
+    skankPatternBankLabel.setBounds (skankPatternBankRow.removeFromLeft (50));
     for (auto& btn : skankPatternBankButtons)
     {
-        btn.setBounds (skankPatternBankRow.removeFromLeft (32));
-        skankPatternBankRow.removeFromLeft (4);
+        btn.setBounds (skankPatternBankRow.removeFromLeft (22));
+        skankPatternBankRow.removeFromLeft (2);
     }
-    skankPatternBankRow.removeFromLeft (10);
-    skankSharedLabel.setBounds (skankPatternBankRow.removeFromLeft (150));
-    skankMakeUniqueButton.setBounds (skankPatternBankRow.removeFromLeft (100));
+    skankPatternBankRow.removeFromLeft (8);
+    skankSharedLabel.setBounds (skankPatternBankRow.removeFromLeft (130));
+    skankMakeUniqueButton.setBounds (skankPatternBankRow.removeFromLeft (90));
 
     area.removeFromTop (8);
 

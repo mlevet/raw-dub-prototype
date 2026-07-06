@@ -70,6 +70,11 @@ private:
     std::array<juce::TextButton, RawDub::AudioEngine::globalPatternBankSize> globalPatternButtons;
     juce::TextButton saveGlobalPatternButton { "Save" };
     juce::TextButton duplicateGlobalPatternButton { "Duplicate" };
+    // Erases the current slot's saved combination/overrides (back to
+    // empty) - doesn't touch the instruments' live state or any
+    // instrument pattern's actual content, only this Global Pattern's
+    // own reference.
+    juce::TextButton clearGlobalPatternButton { "Clear" };
     // "current slot" itself now lives on AudioEngine (see
     // getCurrentGlobalPatternSlot/setCurrentGlobalPatternSlot) - it
     // determines which section's voicing overrides apply during

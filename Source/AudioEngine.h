@@ -62,7 +62,7 @@ public:
     // allocate the max, only activeLength varies" philosophy - avoids
     // any dynamic growth complexity for a first pass. 1-indexed in the
     // UI, 0-indexed internally.
-    static constexpr int bankSize = 8;
+    static constexpr int bankSize = 16;
 
     std::vector<StepPattern> kickBank;
     std::vector<StepPattern> bassBank;
@@ -137,7 +137,7 @@ public:
             skankDecayOverride.value.store (0.0f);
         }
     };
-    static constexpr int globalPatternBankSize = 8;
+    static constexpr int globalPatternBankSize = 16;
     std::array<GlobalPattern, globalPatternBankSize> globalPatterns;
 
     bool isGlobalPatternUsed (int slot) const { return globalPatterns[(size_t) slot].used; }
@@ -160,6 +160,16 @@ public:
         gp.kickIndex = getCurrentKickPatternIndex();
         gp.bassIndex = getCurrentBassPatternIndex();
         gp.skankIndex = getCurrentSkankPatternIndex();
+    }
+
+    // Erases this slot's saved combination and overrides (back to an
+    // empty/unused slot) - doesn't touch the instruments' live state or
+    // any instrument pattern's actual content, only this Global
+    // Pattern's own saved reference. Stays "current" either way, same as
+    // any other slot - clearing doesn't move you elsewhere.
+    void clearGlobalPattern (int slot)
+    {
+        globalPatterns[(size_t) slot].reset();
     }
 
     // For "Duplicate" - an override IS part of what's currently live (the
