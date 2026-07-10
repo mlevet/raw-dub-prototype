@@ -1,8 +1,10 @@
 #pragma once
 #include <JuceHeader.h>
 #include "StepLevel.h"
+#include "PointCurve.h"
 #include <vector>
 #include <atomic>
+#include <map>
 
 namespace RawDub
 {
@@ -60,6 +62,7 @@ public:
             l.store ((int) StepLevel::Normal, std::memory_order_relaxed);
         for (auto& o : offsets)
             o.store (0, std::memory_order_relaxed);
+        curves.clear();
     }
 
     void setLevel (int step, StepLevel level)
@@ -72,9 +75,17 @@ public:
         return (StepLevel) levels[(size_t) step].load (std::memory_order_relaxed);
     }
 
+    // +/-36 (three octaves each way) - widened from +/-12 to allow the
+    // sudden low-register drops real dub basslines use. The UI only
+    // ever shows a fixed-size (24-semitone) window onto this range at
+    // once and scrolls it during a drag rather than growing the window
+    // itself - see StepButton::setPitchViewport and
+    // project_raw_dub_song_architecture memory.
+    static constexpr int maxSemitoneOffset = 36;
+
     void setSemitoneOffset (int step, int offset)
     {
-        offsets[(size_t) step].store (juce::jlimit (-12, 12, offset), std::memory_order_relaxed);
+        offsets[(size_t) step].store (juce::jlimit (-maxSemitoneOffset, maxSemitoneOffset, offset), std::memory_order_relaxed);
     }
 
     int getSemitoneOffset (int step) const
@@ -94,6 +105,49 @@ public:
         return true;
     }
 
+    // Sparse, generic per-parameter curve storage - see
+    // project_raw_dub_song_architecture memory, "any continuous parameter
+    // can become curve-capable." Keyed by a plain int (cast from
+    // whichever instrument's ParamID enum, e.g. BassParamID) rather than
+    // a fixed field per parameter, so adding a new curve-capable
+    // parameter never requires touching StepPattern itself. Absence of
+    // an entry for a given id means "flat/no curve" - falls back to the
+    // instrument's base value (and section override, if active) exactly
+    // as before. An entry is only created the moment a curve is
+    // explicitly requested for that parameter on this pattern, seeded
+    // flat at the value it should represent when nothing has been drawn
+    // yet (mirrors PointCurve::resetToValue - "a fixed value is simply a
+    // flat curve").
+    bool hasCurve (int paramId) const { return curves.find (paramId) != curves.end(); }
+
+    // For ProjectIO serialization - iterate every curve this pattern
+    // actually has (sparse, so usually few or none), not a fixed set.
+    const std::map<int, PointCurve>& getCurves() const { return curves; }
+
+    PointCurve* findCurve (int paramId)
+    {
+        auto it = curves.find (paramId);
+        return it != curves.end() ? &it->second : nullptr;
+    }
+
+    const PointCurve* findCurve (int paramId) const
+    {
+        auto it = curves.find (paramId);
+        return it != curves.end() ? &it->second : nullptr;
+    }
+
+    PointCurve& getOrCreateCurve (int paramId, float initialNormalizedValue)
+    {
+        auto it = curves.find (paramId);
+        if (it != curves.end())
+            return it->second;
+        auto result = curves.try_emplace (paramId);
+        result.first->second.resetToValue (initialNormalizedValue);
+        return result.first->second;
+    }
+
+    void removeCurve (int paramId) { curves.erase (paramId); }
+
     // Vectors of atomics aren't copy-assignable via a plain `=` (same
     // reason PointCurve needs an explicit move constructor - see
     // PointCurve.h), so an explicit field-by-field copy is needed here
@@ -107,6 +161,10 @@ public:
             levels[i].store (other.levels[i].load (std::memory_order_relaxed), std::memory_order_relaxed);
             offsets[i].store (other.offsets[i].load (std::memory_order_relaxed), std::memory_order_relaxed);
         }
+
+        curves.clear();
+        for (const auto& [id, curve] : other.curves)
+            curves.try_emplace (id).first->second.copyFrom (curve);
     }
 
 private:
@@ -114,5 +172,6 @@ private:
     std::vector<std::atomic<bool>> on;
     std::vector<std::atomic<int>> levels;
     std::vector<std::atomic<int>> offsets;
+    std::map<int, PointCurve> curves;
 };
 }

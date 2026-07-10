@@ -4,6 +4,17 @@
 
 namespace RawDub
 {
+// -1 (default) on any field means "use the matching knob" - same
+// sentinel convention as BassVoicingOverrides, see its comment for the
+// full reasoning. Volume is deliberately absent, same reason as Bass's.
+struct KickVoicingOverrides
+{
+    float tuneHz = -1.0f;
+    float punchMs = -1.0f;
+    float decayMs = -1.0f;
+    float drive = -1.0f;
+};
+
 class KickSynth
 {
 public:
@@ -12,7 +23,7 @@ public:
     // applied to the pitch envelope, but nothing in the UI drives it yet
     // (StepButton::hasPitch is false for Kick) - kept uniform so exposing
     // it later needs no data-model change.
-    void trigger (int semitoneOffset = 0, float levelGain = 1.0f);
+    void trigger (int semitoneOffset = 0, float levelGain = 1.0f, const KickVoicingOverrides& overrides = {});
     void renderAdd (float* out, int numSamples);
     void resetToDefaults(); // for "New Project" - restores every param to its shipped default
 
@@ -21,6 +32,12 @@ public:
     std::atomic<float> decayMs { 220.0f };  // amplitude decay
     std::atomic<float> drive   { 0.2f };    // saturation amount
     std::atomic<float> volume  { 1.0f };    // basic level balancing against Bass, 0-1, applied before the master limiter
+    // Instrument-level send to DubDelay - "which instruments feed the
+    // delay," resolved once per instrument, not per-step/per-pattern
+    // yet (see AudioEngine::renderNextBlock and DELAY_FEEDBACK_LOOP_
+    // ANALYSIS.txt). Off by default - the whole point is choosing which
+    // instruments feed the loop, so nothing is routed there unopted-in.
+    std::atomic<float> delaySend { 0.0f };
 
 private:
     double sampleRate = 44100.0;

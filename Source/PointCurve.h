@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <atomic>
+#include <cmath>
 #include <vector>
 
 namespace RawDub
@@ -150,6 +151,23 @@ public:
         pos[1].store (1.0f);
         val[1].store (value);
         count.store (2);
+    }
+
+    // True if every point currently has the same value (within a small
+    // tolerance) - a curve in this state is behaviourally identical to
+    // no curve at all ("a fixed value is simply a flat curve"), used to
+    // decide when to auto-remove a curve that's been flattened, whether
+    // by the slider or by manually dragging points together.
+    bool isFlat (float tolerance = 0.001f) const
+    {
+        int n = count.load();
+        if (n < 2)
+            return true;
+        float first = val[0].load();
+        for (int i = 1; i < n; ++i)
+            if (std::abs (val[(size_t) i].load() - first) > tolerance)
+                return false;
+        return true;
     }
 
     // For "Make Unique" (see project_raw_dub_song_architecture memory) -

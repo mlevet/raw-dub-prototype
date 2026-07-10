@@ -1,0 +1,229 @@
+RAW DUB PROTOTYPE - BASS: CURVE AND SECTION-OVERRIDE SYSTEM
+=======================================================================
+Written 2026-07-09. Describes the generic curve/override system as it
+currently behaves for Bass, after the "calm by default" UI rework and
+the two visibility bugs found and fixed during testing. Scoped to Bass
+only - Kick and Skank (aside from Skank's older, separate SawMix curve)
+don't have this system yet.
+
+
+1. GOVERNING PHILOSOPHY
+-----------------------------------------------------------------------
+Internally: any continuous Bass parameter can carry a per-pattern curve
+and (for three specific params) a per-section override. Externally: the
+instrument shows none of this by default. A parameter row looks exactly
+like a plain label + slider until you explicitly ask for more via
+right-click. "The architecture should be powerful. The interface should
+remain calm."
+
+Nothing about this system is visible on an untouched row: no button, no
+icon, no reserved dead space. The moment something becomes active
+(a curve exists, or a section override is on) a single small indicator
+dot appears next to that row's label - the only permanent sign that
+anything unusual is happening, and it disappears again the moment
+nothing is active.
+
+
+2. WHICH PARAMETERS ARE COVERED
+-----------------------------------------------------------------------
+Curve-capable (10 of them, see ParamID.h's BassParamID enum): Tune,
+Drive, Cutoff, Resonance, Length, Pitch Env Amount, Pitch Env Decay,
+Filter Env Amount, Filter Env Decay, Drive Transient Amount.
+
+Section-override-capable (3 of the above, a strict subset): Drive,
+Cutoff, Resonance. These predate the curve system and were kept as-is.
+
+NOT covered by either mechanism, on purpose:
+  - AM Depth: continuous, but excluded for now because AM mode itself
+    is still a research switch, not settled instrument identity - not
+    a permanent "doesn't deserve it" judgement, a scope decision.
+  - Volume: structurally excluded - it's read continuously every audio
+    block (a live mixing control), not resolved once at trigger time
+    like every other Bass parameter, so it doesn't fit either mechanism.
+
+Categorical/discrete controls (AM ratio, Drive/AM harmonic mode switch,
+pattern bank number, Length preset buttons) never had this system and
+never will - the dividing line is continuous vs. discrete, decided once
+per parameter, not a curated allowlist.
+
+
+3. WHAT AN UNTOUCHED ROW LOOKS LIKE
+-----------------------------------------------------------------------
+Label, slider, nothing else. Moving the slider writes straight to the
+instrument's base parameter (e.g. BassSynth::cutoffHz), exactly as it
+always has. No indicator, no reserved layout space for one - an
+inactive row is pixel-identical to a plain ParamRow.
+
+
+4. REQUESTING A CURVE
+-----------------------------------------------------------------------
+Right-click the slider (or, on a single-button trackpad, ctrl-click -
+JUCE's isPopupMenu() covers both automatically). A context menu
+appears, built fresh each time from current state:
+  - If the row has no curve yet: "Add Curve." Creates a curve seeded
+    FLAT at whatever the slider currently shows (never a silent jump
+    in sound - "a fixed value is simply a flat curve"), and expands
+    the curve editor immediately.
+  - If the row already has a curve: "Edit Curve" (expands the editor)
+    and "Remove Curve" (deletes the curve entirely, collapses the
+    editor if it was open).
+  - If the row also has a section-override mechanism (Drive/Cutoff/
+    Resonance only): a checkable "Section Override" item reflecting
+    whether it's currently active for the current Global Pattern,
+    toggled by selecting it.
+
+The menu only ever offers what's actually applicable to that specific
+row - no grayed-out options for mechanisms a param doesn't have.
+
+
+5. WHILE A CURVE IS EXPANDED
+-----------------------------------------------------------------------
+The curve editor (CurveLaneEditor, the same widget Skank's SawMix
+uses) appears directly below that row - sparse draggable points
+connected by straight lines, x-axis is position within the phrase
+(0-1), y-axis is the parameter's own range. The slider stays visible
+alongside it and keeps working: moving the slider FLATTENS the curve
+back to that value (collapses all points to one flat line at the new
+value) - there is never a moment where the slider and the curve
+disagree about what "the current value" means, because the slider
+literally rewrites the curve when used. A small "x" button in the
+editor's corner collapses the editor back down without touching the
+curve's data - the curve stays fully active for playback, it's simply
+off-screen again.
+
+
+6. THE INDICATOR DOT
+-----------------------------------------------------------------------
+A small (~14px) filled circle appears next to a row's label whenever
+that row has an active curve and/or an active section override -
+otherwise it (and the space it would occupy) doesn't exist at all.
+Clicking it:
+  - If the row has a curve: expands the curve editor directly (the
+    same effect as choosing "Edit Curve" from the menu).
+  - If the row only has an active override (no curve): opens the
+    context menu instead, since there's no editor to jump into - the
+    override toggle lives only in that menu.
+
+
+7. RESOLUTION ORDER AT PLAYBACK
+-----------------------------------------------------------------------
+For every continuous Bass parameter, on every trigger (sequenced step
+or manual Trigger button), resolved in this order:
+  1. Pattern curve, if the CURRENT Bass pattern has one for this param
+     - sampled at this step's position within the phrase (0-1),
+       denormalized into the parameter's real range. Wins outright if
+       present.
+  2. Section override, if active for the CURRENT Global Pattern (only
+     possible for Drive/Cutoff/Resonance) - a flat value for the
+     whole section, independent of phrase position.
+  3. The instrument's base value (the slider's plain setting) -
+     the fallback when neither of the above applies.
+
+Pattern curves and section overrides are deliberately kept as separate
+mechanisms answering different musical questions ("how does this
+phrase evolve over time" vs. "how should this section voice the same
+phrase differently") - seeing this file's project memory equivalent,
+project_raw_dub_song_architecture, for the full reasoning. A curve does
+not retire or get blocked by an override existing, and vice versa -
+they simply have a fixed precedence when both happen to apply.
+
+
+8. DATA MODEL / STORAGE
+-----------------------------------------------------------------------
+Curves live on the PATTERN (StepPattern::curves, a sparse
+std::map<int, PointCurve> keyed by the BassParamID enum cast to int) -
+musical material, travels with the pattern through Make Unique/
+Duplicate/save-load, same as steps/pitch/level always have. Absent
+entry = flat/no curve, costs nothing. An entry is only created the
+instant a curve is explicitly requested for that param on that
+pattern.
+
+Section overrides live on the GLOBAL PATTERN (AudioEngine::
+GlobalPattern's bassDriveOverride/bassCutoffOverride/
+bassResonanceOverride), unchanged from before the curve system existed
+- a section-scoped concept, not a pattern-scoped one.
+
+Both persist to the project JSON: curves as a nested "curves" object
+per pattern slot (only present if non-empty), overrides as they always
+have. Old project files with no curve data load fine - absence is
+just "no curves," not an error.
+
+
+9. KNOWN CURRENT LIMITS
+-----------------------------------------------------------------------
+  - Bass only. Kick has no curve system at all. Skank still has its
+    older, separate, always-on SawMix curve (never collapsible, never
+    optional) - not yet migrated to this generic mechanism.
+  - AM Depth and Volume excluded (see section 2) - not a permanent
+    exclusion, a sequencing choice.
+  - The right-click menu is the only entry point - no keyboard
+    shortcut, no drag-based gesture, nothing else has been considered
+    or built.
+
+
+ADDENDUM 2026-07-10 - INTERACTION MODEL REPLACED, OVERRIDE CAN NOW OWN
+ITS OWN CURVE
+-----------------------------------------------------------------------
+Two changes since the above was written. Sections 3, 4, 6, and 7 above
+are now out of date; this addendum is authoritative where it conflicts
+with them. Sections 1, 2, 5, 8 (data model) still apply, with the one
+addition noted below.
+
+A) INTERACTION MODEL - no more right-click menu, no more indicator dot
+(sections 3/4/6 superseded). Settled on a simpler direct-manipulation
+model instead:
+  - TITLE click = phrase-level. No curve in the row's current scope
+    (see (B) below for what "scope" means now) - creates one, seeded
+    flat at the slider's current value, and expands it. Curve already
+    exists - toggles the editor open/closed. Collapsing an unshaped
+    (still-flat) curve removes it outright, same "a flattened curve is
+    no curve" rule as always.
+  - VALUE BOX click (single click on the slider's numeric readout,
+    only for Drive/Cutoff/Resonance) = section-level. Toggles the
+    section override on/off. Double-click still types an exact value
+    (had to disable Slider's native single-click-to-edit and drive
+    showTextBox() manually to make single vs. double click
+    distinguishable at all - see MainComponent.cpp/ValueBoxSlider.h).
+  - SLIDER = always edits whichever is currently selected (override if
+    active, else the instrument's base value) - unchanged in spirit,
+    just no longer paired with a right-click menu.
+  - No separate indicator component: the title text ("Cutoff" vs
+    "~ Cutoff") shows curve state, the value box's own colour (normal
+    vs inverted) shows override state. Both ARE the indicator.
+
+B) OVERRIDE CAN NOW OWN ITS OWN CURVE, INDEPENDENT OF THE PATTERN'S
+(section 7's resolution order superseded). Previously the pattern
+curve always won outright when both existed, which made toggling an
+override a silent no-op whenever the pattern already had a curve for
+that param - confusing, and made it impossible to give one section a
+different SHAPE (not just a different flat value) without forking the
+whole pattern via Make Unique.
+
+Fixed by giving AudioEngine::ParamOverride its own optional curve
+(hasCurve flag + a PointCurve, alongside the existing active/value
+fields - see AudioEngine.h). New resolution order:
+  1. Section override, if active - as EITHER its own curve (if it has
+     one) or its flat value. An active override now fully takes over
+     for that section, curve or not.
+  2. Else, pattern curve, if the current Bass pattern has one.
+  3. Else, the instrument's base value.
+
+Practically: turning Override on still starts flat (seeded from the
+current value, same "never a silent jump" rule as before) and has no
+visible curve of its own yet. Opening/creating a curve WHILE Override
+is active (title click) creates a curve that belongs to the OVERRIDE,
+not the pattern - seeded from the pattern's own curve shape if it has
+one (so you start from what you were already hearing), otherwise flat.
+Editing it only ever touches the override's copy; the pattern's own
+curve, and any other section/pattern that reads it, is untouched.
+Turning Override off doesn't discard its curve - toggling back on
+later picks up right where you left it (MainComponent.cpp's
+activeBassCurve/activeBassCurveOrCreate/activeBassCurveExists/
+removeActiveBassCurve are the single choke point every row callback
+goes through now, so "which curve is in scope" is resolved once, not
+re-derived per callback).
+
+Persists to project JSON as two more properties per override
+(*OverrideHasCurve, *OverrideCurve) alongside the existing *Active/
+*Value ones - absent in old saves, defaults to no curve, same
+legacy-safe pattern as everything else in this system.

@@ -24,16 +24,15 @@ public:
         {
             setUsingNativeTitleBar (true);
 
-            // The instrument list keeps growing (Kick/Bass/AM/Skank...),
-            // so the content is taller than most screens can show in one
-            // fixed window. Scroll instead of resizing the window every
-            // time - content keeps its own natural size, the window
-            // stays a reasonable, screen-safe fixed size.
-            auto* viewport = new juce::Viewport();
-            viewport->setViewedComponent (new MainComponent(), true);
-            viewport->setScrollBarsShown (true, false);
-
-            setContentOwned (viewport, true);
+            // Used to wrap this in a scrolling juce::Viewport, from when
+            // the whole instrument list was always stacked (content was
+            // ~2100px tall). Since the instrument tabs redesign, only one
+            // instrument's section is shown at a time and the content
+            // fits comfortably inside a normal fixed window (~900px) -
+            // removed the Viewport entirely rather than leave it as dead
+            // weight, since it was also capturing mouse wheel events
+            // meant for the pitch grid's own scroll handling.
+            setContentOwned (new MainComponent(), true);
             centreWithSize (860, 950);
             setResizable (true, false);
             setVisible (true);

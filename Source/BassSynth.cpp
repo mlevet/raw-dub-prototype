@@ -19,9 +19,15 @@ void BassSynth::resetToDefaults()
     amRatio.store (1.0f);
     amDepth.store (0.8f);
     volume.store (1.0f);
+    pitchEnvAmount.store (0.5f);
+    pitchEnvDecayMs.store (100.0f);
+    filterEnvAmount.store (300.0f);
+    filterEnvDecayMs.store (60.0f);
+    driveTransientAmount.store (0.06f);
+    delaySend.store (0.0f);
 }
 
-void BassSynth::trigger (int semitoneOffset, float levelGain, float driveOverride, float cutoffOverride)
+void BassSynth::trigger (int semitoneOffset, float levelGain, const BassVoicingOverrides& overrides)
 {
     if (active)
     {
@@ -37,15 +43,14 @@ void BassSynth::trigger (int semitoneOffset, float levelGain, float driveOverrid
         chokeT = 0.0;
         pendingSemitoneOffset = semitoneOffset;
         pendingLevelGain = levelGain;
-        pendingDriveOverride = driveOverride;
-        pendingCutoffOverride = cutoffOverride;
+        pendingOverrides = overrides;
         return;
     }
 
-    applyTrigger (semitoneOffset, levelGain, driveOverride, cutoffOverride);
+    applyTrigger (semitoneOffset, levelGain, overrides);
 }
 
-void BassSynth::applyTrigger (int semitoneOffset, float levelGain, float driveOverride, float cutoffOverride)
+void BassSynth::applyTrigger (int semitoneOffset, float levelGain, const BassVoicingOverrides& overrides)
 {
     active = true;
     choking = false;
@@ -55,19 +60,40 @@ void BassSynth::applyTrigger (int semitoneOffset, float levelGain, float driveOv
     svfLow = 0.0;
     svfBand = 0.0;
 
-    freq = (double) tuneHz.load() * std::pow (2.0, semitoneOffset / 12.0);
-    holdSeconds = juce::jmax (0.02, (double) decayMs.load() / 1000.0);
+    float tuneKnob = (overrides.tuneHz >= 0.0f) ? overrides.tuneHz : tuneHz.load();
+    freq = (double) tuneKnob * std::pow (2.0, semitoneOffset / 12.0);
+
+    float pitchEnvAmountKnob = (overrides.pitchEnvAmount >= 0.0f) ? overrides.pitchEnvAmount : pitchEnvAmount.load();
+    pitchEnvAmountSnapshot = (double) juce::jlimit (0.0f, 12.0f, pitchEnvAmountKnob);
+    float pitchEnvDecayKnob = (overrides.pitchEnvDecayMs >= 0.0f) ? overrides.pitchEnvDecayMs : pitchEnvDecayMs.load();
+    pitchEnvDecaySecondsSnapshot = juce::jmax (0.005, (double) pitchEnvDecayKnob / 1000.0);
+
+    float lengthKnob = (overrides.decayMs >= 0.0f) ? overrides.decayMs : decayMs.load();
+    holdSeconds = juce::jmax (0.02, (double) lengthKnob / 1000.0);
     triggerGain = (double) levelGain;
-    driveAmt = (driveOverride >= 0.0f) ? (double) driveOverride : (double) drive.load();
+
+    float driveKnob = (overrides.drive >= 0.0f) ? overrides.drive : drive.load();
+    driveAmt = (double) driveKnob;
+    float driveTransientKnob = (overrides.driveTransientAmount >= 0.0f) ? overrides.driveTransientAmount : driveTransientAmount.load();
+    driveTransientAmountSnapshot = (double) juce::jlimit (0.0f, 1.0f, driveTransientKnob);
+
     amModeSnapshot = useAMMode.load();
     amRatioSnapshot = (double) amRatio.load();
-    amDepthSnapshot = (double) amDepth.load();
+    float amDepthKnob = (overrides.amDepth >= 0.0f) ? overrides.amDepth : amDepth.load();
+    amDepthSnapshot = (double) juce::jlimit (0.0f, 1.0f, amDepthKnob);
 
-    float cutoffKnob = (cutoffOverride >= 0.0f) ? cutoffOverride : cutoffHz.load();
-    double cutoff = (double) juce::jlimit (20.0f, (float) (sampleRate * 0.45), cutoffKnob);
-    svfF = 2.0 * std::sin (juce::MathConstants<double>::pi * cutoff / sampleRate);
+    // svfF itself is now computed fresh every sample in renderAdd,
+    // since Filter Envelope makes the effective cutoff move within the
+    // note - only the resolved base value is snapshotted here.
+    float cutoffKnob = (overrides.cutoffHz >= 0.0f) ? overrides.cutoffHz : cutoffHz.load();
+    baseCutoffSnapshot = (double) juce::jlimit (20.0f, (float) (sampleRate * 0.45), cutoffKnob);
+    float filterEnvAmountKnob = (overrides.filterEnvAmount >= 0.0f) ? overrides.filterEnvAmount : filterEnvAmount.load();
+    filterEnvAmountSnapshot = (double) juce::jlimit (0.0f, 3000.0f, filterEnvAmountKnob);
+    float filterEnvDecayKnob = (overrides.filterEnvDecayMs >= 0.0f) ? overrides.filterEnvDecayMs : filterEnvDecayMs.load();
+    filterEnvDecaySecondsSnapshot = juce::jmax (0.005, (double) filterEnvDecayKnob / 1000.0);
 
-    double res = (double) juce::jlimit (0.0f, 0.95f, resonance.load());
+    float resonanceKnob = (overrides.resonance >= 0.0f) ? overrides.resonance : resonance.load();
+    double res = (double) juce::jlimit (0.0f, 0.95f, resonanceKnob);
     svfQ = 1.0 - res;
 }
 
@@ -84,7 +110,19 @@ void BassSynth::renderAdd (float* out, int numSamples)
 
     for (int i = 0; i < numSamples; ++i)
     {
-        phase += freq * dt;
+        // Phase 1 of BASS_DUB_PRESSURE_ANALYSIS.txt: transient pitch
+        // drop, exponential decay to the stable target frequency -
+        // starts at the full amount at t=0 (note onset) and is
+        // essentially gone within a few decay-time-constants, never
+        // touching the sustained pitch. Computed once per sample and
+        // applied to BOTH the oscillator and (if active) the AM
+        // modulator, so the modulator's harmonic lock to the
+        // fundamental (see amRatio's comment) holds even while the
+        // pitch is still bending.
+        double pitchEnvSemitones = pitchEnvAmountSnapshot * std::exp (-t / pitchEnvDecaySecondsSnapshot);
+        double freqEffective = freq * std::pow (2.0, pitchEnvSemitones / 12.0);
+
+        phase += freqEffective * dt;
         if (phase >= 1.0)
             phase -= 1.0;
 
@@ -100,7 +138,7 @@ void BassSynth::renderAdd (float* out, int numSamples)
             // rate, no gong/metallic inharmonicity. Bypasses Drive and
             // the fixed warmth entirely so the two mechanisms are
             // compared cleanly, never stacked.
-            modPhase += freq * amRatioSnapshot * dt;
+            modPhase += freqEffective * amRatioSnapshot * dt;
             if (modPhase >= 1.0)
                 modPhase -= 1.0;
 
@@ -124,16 +162,35 @@ void BassSynth::renderAdd (float* out, int numSamples)
             // fully decoupled (measured: feeding warmth into Drive
             // generates real intermodulation that read as "digital
             // dirtiness").
+            // Experiment C: drive briefly richer during the attack,
+            // decaying back to the knob's value - the circuit
+            // behaving differently under the transient, not a second
+            // envelope layered on top. See driveTransientAmount's
+            // comment in BassSynth.h.
+            double transientDrive = driveTransientAmountSnapshot * std::exp (-t / transientDriveDecaySeconds);
+            double driveEffective = juce::jlimit (0.0, 1.0, driveAmt + transientDrive);
+
             double shaped = osc;
-            if (driveAmt > 0.0001)
+            if (driveEffective > 0.0001)
             {
-                double k = 1.0 + driveAmt * 12.0;
+                double k = 1.0 + driveEffective * 12.0;
                 shaped = std::tanh (osc * k) / std::tanh (k);
             }
 
             double warmth = osc * osc - 0.5;
             voiced = shaped + 0.12 * warmth;
         }
+
+        // Filter Envelope: cutoff opens above baseCutoffSnapshot at note
+        // onset and exponentially decays back down - same shape as the
+        // pitch envelope above, a second facet of the same transient
+        // behaviour, never touching the sustained cutoff once settled.
+        // Recomputed every sample (unlike a static filter, which only
+        // needs its coefficient once per trigger) because the cutoff
+        // itself is moving during the note, not just at the start.
+        double filterEnvHz = filterEnvAmountSnapshot * std::exp (-t / filterEnvDecaySecondsSnapshot);
+        double cutoffEffective = juce::jlimit (20.0, sampleRate * 0.45, baseCutoffSnapshot + filterEnvHz);
+        svfF = 2.0 * std::sin (juce::MathConstants<double>::pi * cutoffEffective / sampleRate);
 
         double high = voiced - svfLow - svfQ * svfBand;
         svfBand += svfF * high;
@@ -153,7 +210,7 @@ void BassSynth::renderAdd (float* out, int numSamples)
 
             chokeT += dt;
             if (chokeT >= chokeTau)
-                applyTrigger (pendingSemitoneOffset, pendingLevelGain, pendingDriveOverride, pendingCutoffOverride);
+                applyTrigger (pendingSemitoneOffset, pendingLevelGain, pendingOverrides);
 
             continue;
         }

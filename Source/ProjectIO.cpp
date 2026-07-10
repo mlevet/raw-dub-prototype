@@ -4,6 +4,11 @@ namespace RawDub
 {
 namespace
 {
+juce::var curveToVar (const PointCurve& curve);
+void curveFromVar (const juce::var& v, PointCurve& curve);
+juce::var overrideMapToVar (const AudioEngine::OverrideMap& map);
+void overrideMapFromVar (const juce::var& v, AudioEngine::OverrideMap& map);
+
 juce::var patternToVar (const StepPattern& pattern)
 {
     juce::Array<juce::var> onArr, levelArr, offsetArr;
@@ -19,6 +24,20 @@ juce::var patternToVar (const StepPattern& pattern)
     obj->setProperty ("on", onArr);
     obj->setProperty ("levels", levelArr);
     obj->setProperty ("offsets", offsetArr);
+
+    // Sparse, generic per-parameter curves (see StepPattern::curves) -
+    // "any continuous parameter can become curve-capable," so this is a
+    // map keyed by paramId, not a fixed field per parameter. Usually
+    // empty or small - only params someone actually requested a curve
+    // for are present at all.
+    if (! pattern.getCurves().empty())
+    {
+        auto* curvesObj = new juce::DynamicObject();
+        for (const auto& [id, curve] : pattern.getCurves())
+            curvesObj->setProperty (juce::String (id), curveToVar (curve));
+        obj->setProperty ("curves", juce::var (curvesObj));
+    }
+
     return juce::var (obj);
 }
 
@@ -42,6 +61,21 @@ void patternFromVar (const juce::var& v, StepPattern& pattern)
             pattern.setLevel (i, (StepLevel) (int) (*levelArr)[i]);
         if (offsetArr != nullptr && i < offsetArr->size())
             pattern.setSemitoneOffset (i, (int) (*offsetArr)[i]);
+    }
+
+    // "curves" is absent on older/legacy project files (or any pattern
+    // that never had one requested) - that's just "no curves," not an
+    // error, so there's nothing to restore and every param falls back to
+    // its base/override value exactly as it always has.
+    auto curvesVar = v.getProperty ("curves", juce::var());
+    if (auto* curvesObj = curvesVar.getDynamicObject())
+    {
+        for (const auto& prop : curvesObj->getProperties())
+        {
+            int paramId = prop.name.toString().getIntValue();
+            auto& curve = pattern.getOrCreateCurve (paramId, 0.5f);
+            curveFromVar (prop.value, curve);
+        }
     }
 }
 
@@ -81,6 +115,45 @@ void curveFromVar (const juce::var& v, PointCurve& curve)
     }
 }
 
+// Sparse per-instrument section-override storage (see AudioEngine::
+// OverrideMap) - nested object keyed by paramId-as-string, same "absent
+// entry = default/inactive" convention patternToVar already uses for
+// StepPattern::curves. Only entries someone actually touched exist at
+// all, so an untouched Global Pattern's override maps serialize as
+// empty objects, not 30-ish always-present zeroed fields.
+juce::var overrideMapToVar (const AudioEngine::OverrideMap& map)
+{
+    auto* obj = new juce::DynamicObject();
+    for (const auto& [id, ov] : map)
+    {
+        auto* entry = new juce::DynamicObject();
+        entry->setProperty ("active", ov.active.load());
+        entry->setProperty ("value", (double) ov.value.load());
+        entry->setProperty ("hasCurve", ov.hasCurve.load());
+        entry->setProperty ("curve", curveToVar (ov.curve));
+        obj->setProperty (juce::String (id), juce::var (entry));
+    }
+    return juce::var (obj);
+}
+
+void overrideMapFromVar (const juce::var& v, AudioEngine::OverrideMap& map)
+{
+    map.clear();
+    auto* obj = v.getDynamicObject();
+    if (obj == nullptr)
+        return;
+
+    for (const auto& prop : obj->getProperties())
+    {
+        int paramId = prop.name.toString().getIntValue();
+        auto& ov = map[paramId];
+        ov.active.store ((bool) prop.value.getProperty ("active", false));
+        ov.value.store ((float) (double) prop.value.getProperty ("value", 0.0));
+        ov.hasCurve.store ((bool) prop.value.getProperty ("hasCurve", false));
+        curveFromVar (prop.value.getProperty ("curve", juce::var()), ov.curve);
+    }
+}
+
 // Instrument pattern banks - see project_raw_dub_song_architecture
 // memory. Saves every slot in the bank plus which one is currently
 // selected, not just the live pattern - so switching banks and saving
@@ -101,6 +174,22 @@ juce::var bassBankToVar (AudioEngine& engine)
     return arr;
 }
 
+juce::var snareBankToVar (AudioEngine& engine)
+{
+    juce::Array<juce::var> arr;
+    for (auto& p : engine.snareBank)
+        arr.add (patternToVar (p));
+    return arr;
+}
+
+juce::var hihatBankToVar (AudioEngine& engine)
+{
+    juce::Array<juce::var> arr;
+    for (auto& p : engine.hihatBank)
+        arr.add (patternToVar (p));
+    return arr;
+}
+
 juce::var skankBankToVar (AudioEngine& engine)
 {
     juce::Array<juce::var> arr;
@@ -109,6 +198,12 @@ juce::var skankBankToVar (AudioEngine& engine)
         auto* obj = new juce::DynamicObject();
         obj->setProperty ("pattern", patternToVar (slot.steps));
         obj->setProperty ("sawMixCurve", curveToVar (slot.sawMixCurve));
+
+        juce::Array<juce::var> chordArr;
+        for (int i = 0; i < StepPattern::maxLength; ++i)
+            chordArr.add (slot.getChordIsMinor (i));
+        obj->setProperty ("chordIsMinor", chordArr);
+
         arr.add (juce::var (obj));
     }
     return arr;
@@ -128,12 +223,24 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     auto* root = new juce::DynamicObject();
     root->setProperty ("tempo", engine.getTempoBpm());
 
+    // Send effect on the whole mix, not a sequenced instrument - no
+    // pattern bank, just its five params plus bypass (see DubDelay.h).
+    auto* delayParams = new juce::DynamicObject();
+    delayParams->setProperty ("timeMs",   (double) engine.delay.timeMs.load());
+    delayParams->setProperty ("feedback", (double) engine.delay.feedback.load());
+    delayParams->setProperty ("toneHz",   (double) engine.delay.toneHz.load());
+    delayParams->setProperty ("drive",    (double) engine.delay.drive.load());
+    delayParams->setProperty ("wet",      (double) engine.delay.wet.load());
+    delayParams->setProperty ("bypass",   engine.delay.bypass.load());
+    root->setProperty ("delay", juce::var (delayParams));
+
     auto* kickParams = new juce::DynamicObject();
     kickParams->setProperty ("tune",  (double) engine.kick.tuneHz.load());
     kickParams->setProperty ("punch", (double) engine.kick.punchMs.load());
     kickParams->setProperty ("decay", (double) engine.kick.decayMs.load());
     kickParams->setProperty ("drive", (double) engine.kick.drive.load());
     kickParams->setProperty ("volume", (double) engine.kick.volume.load());
+    kickParams->setProperty ("delaySend", (double) engine.kick.delaySend.load());
 
     auto* kickObj = new juce::DynamicObject();
     kickObj->setProperty ("params", juce::var (kickParams));
@@ -148,9 +255,15 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     bassParams->setProperty ("resonance", (double) engine.bass.resonance.load());
     bassParams->setProperty ("length",    (double) engine.bass.decayMs.load());
     bassParams->setProperty ("volume",    (double) engine.bass.volume.load());
+    bassParams->setProperty ("delaySend", (double) engine.bass.delaySend.load());
     bassParams->setProperty ("useAM",     engine.bass.useAMMode.load());
     bassParams->setProperty ("amRatio",   (double) engine.bass.amRatio.load());
     bassParams->setProperty ("amDepth",   (double) engine.bass.amDepth.load());
+    bassParams->setProperty ("pitchEnvAmount", (double) engine.bass.pitchEnvAmount.load());
+    bassParams->setProperty ("pitchEnvDecayMs", (double) engine.bass.pitchEnvDecayMs.load());
+    bassParams->setProperty ("filterEnvAmount", (double) engine.bass.filterEnvAmount.load());
+    bassParams->setProperty ("filterEnvDecayMs", (double) engine.bass.filterEnvDecayMs.load());
+    bassParams->setProperty ("driveTransientAmount", (double) engine.bass.driveTransientAmount.load());
 
     auto* bassObj = new juce::DynamicObject();
     bassObj->setProperty ("params", juce::var (bassParams));
@@ -165,6 +278,7 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     skankParams->setProperty ("drive",  (double) engine.skank.drive.load());
     skankParams->setProperty ("minor",  engine.skank.minorChord.load());
     skankParams->setProperty ("volume", (double) engine.skank.volume.load());
+    skankParams->setProperty ("delaySend", (double) engine.skank.delaySend.load());
 
     auto* skankObj = new juce::DynamicObject();
     skankObj->setProperty ("params", juce::var (skankParams));
@@ -172,12 +286,44 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     skankObj->setProperty ("patternBank", skankBankToVar (engine));
     root->setProperty ("skank", juce::var (skankObj));
 
+    auto* snareParams = new juce::DynamicObject();
+    snareParams->setProperty ("tune",     (double) engine.snare.tuneHz.load());
+    snareParams->setProperty ("noiseMix", (double) engine.snare.noiseMix.load());
+    snareParams->setProperty ("cutoff",   (double) engine.snare.cutoffHz.load());
+    snareParams->setProperty ("resonance",(double) engine.snare.resonance.load());
+    snareParams->setProperty ("decay",    (double) engine.snare.decayMs.load());
+    snareParams->setProperty ("drive",    (double) engine.snare.drive.load());
+    snareParams->setProperty ("volume",   (double) engine.snare.volume.load());
+    snareParams->setProperty ("delaySend",(double) engine.snare.delaySend.load());
+
+    auto* snareObj = new juce::DynamicObject();
+    snareObj->setProperty ("params", juce::var (snareParams));
+    snareObj->setProperty ("currentPatternIndex", engine.getCurrentSnarePatternIndex());
+    snareObj->setProperty ("patternBank", snareBankToVar (engine));
+    root->setProperty ("snare", juce::var (snareObj));
+
+    auto* hihatParams = new juce::DynamicObject();
+    hihatParams->setProperty ("cutoff",   (double) engine.hihat.cutoffHz.load());
+    hihatParams->setProperty ("resonance",(double) engine.hihat.resonance.load());
+    hihatParams->setProperty ("decay",    (double) engine.hihat.decayMs.load());
+    hihatParams->setProperty ("drive",    (double) engine.hihat.drive.load());
+    hihatParams->setProperty ("volume",   (double) engine.hihat.volume.load());
+    hihatParams->setProperty ("delaySend",(double) engine.hihat.delaySend.load());
+
+    auto* hihatObj = new juce::DynamicObject();
+    hihatObj->setProperty ("params", juce::var (hihatParams));
+    hihatObj->setProperty ("currentPatternIndex", engine.getCurrentHiHatPatternIndex());
+    hihatObj->setProperty ("patternBank", hihatBankToVar (engine));
+    root->setProperty ("hihat", juce::var (hihatObj));
+
     // Global Patterns - see project_raw_dub_song_architecture memory.
-    // No musical data, just three saved indices per slot, plus optional
-    // section-level voicing overrides (Bass Drive/Cutoff - see
-    // AudioEngine::ParamOverride). Overrides are independent of "used"
-    // (edited through their own controls, not created by Save), so they
-    // serialize regardless of whether the slot has a saved combination.
+    // No musical data, just five saved indices per slot, plus optional
+    // section-level voicing overrides (see AudioEngine::OverrideMap -
+    // one sparse map per instrument, covering every curve/override-
+    // capable param on it now, not just Bass Drive/Cutoff/Resonance and
+    // Skank Decay). Overrides are independent of "used" (edited through
+    // their own controls, not created by Save), so they serialize
+    // regardless of whether the slot has a saved combination.
     juce::Array<juce::var> globalPatternsArr;
     for (int i = 0; i < AudioEngine::globalPatternBankSize; ++i)
     {
@@ -192,13 +338,14 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
             obj->setProperty ("kick", gp.kickIndex);
             obj->setProperty ("bass", gp.bassIndex);
             obj->setProperty ("skank", gp.skankIndex);
+            obj->setProperty ("snare", gp.snareIndex);
+            obj->setProperty ("hihat", gp.hihatIndex);
         }
-        obj->setProperty ("bassDriveOverrideActive", gp.bassDriveOverride.active.load());
-        obj->setProperty ("bassDriveOverrideValue", (double) gp.bassDriveOverride.value.load());
-        obj->setProperty ("bassCutoffOverrideActive", gp.bassCutoffOverride.active.load());
-        obj->setProperty ("bassCutoffOverrideValue", (double) gp.bassCutoffOverride.value.load());
-        obj->setProperty ("skankDecayOverrideActive", gp.skankDecayOverride.active.load());
-        obj->setProperty ("skankDecayOverrideValue", (double) gp.skankDecayOverride.value.load());
+        obj->setProperty ("bassOverrides", overrideMapToVar (gp.bassOverrides));
+        obj->setProperty ("kickOverrides", overrideMapToVar (gp.kickOverrides));
+        obj->setProperty ("skankOverrides", overrideMapToVar (gp.skankOverrides));
+        obj->setProperty ("snareOverrides", overrideMapToVar (gp.snareOverrides));
+        obj->setProperty ("hihatOverrides", overrideMapToVar (gp.hihatOverrides));
         globalPatternsArr.add (juce::var (obj));
     }
     root->setProperty ("globalPatterns", globalPatternsArr);
@@ -218,6 +365,23 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
 
     engine.setTempoBpm ((double) rootVar.getProperty ("tempo", engine.getTempoBpm()));
 
+    // absent "delay" on older project files is just "no delay saved
+    // yet," not an error - every property below already falls back to
+    // the engine's current (shipped-default) value
+    auto delayVar = rootVar.getProperty ("delay", juce::var());
+    if (delayVar.isObject())
+    {
+        engine.delay.timeMs.store   ((float) (double) delayVar.getProperty ("timeMs",   (double) engine.delay.timeMs.load()));
+        engine.delay.feedback.store ((float) (double) delayVar.getProperty ("feedback", (double) engine.delay.feedback.load()));
+        engine.delay.toneHz.store   ((float) (double) delayVar.getProperty ("toneHz",   (double) engine.delay.toneHz.load()));
+        engine.delay.drive.store    ((float) (double) delayVar.getProperty ("drive",    (double) engine.delay.drive.load()));
+        engine.delay.wet.store      ((float) (double) delayVar.getProperty ("wet",      (double) engine.delay.wet.load()));
+        engine.delay.bypass.store   ((bool) delayVar.getProperty ("bypass", engine.delay.bypass.load()));
+    }
+    // a loaded project's delay buffer should never carry over old audio
+    // energy from whatever was playing before Open was clicked
+    engine.delay.clearBuffer();
+
     auto kickVar = rootVar.getProperty ("kick", juce::var());
     if (kickVar.isObject())
     {
@@ -227,6 +391,7 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         engine.kick.decayMs.store ((float) (double) p.getProperty ("decay", (double) engine.kick.decayMs.load()));
         engine.kick.drive.store   ((float) (double) p.getProperty ("drive", (double) engine.kick.drive.load()));
         engine.kick.volume.store  ((float) (double) p.getProperty ("volume", (double) engine.kick.volume.load()));
+        engine.kick.delaySend.store ((float) (double) p.getProperty ("delaySend", (double) engine.kick.delaySend.load()));
 
         auto* bankArr = kickVar.getProperty ("patternBank", juce::var()).getArray();
         if (bankArr != nullptr)
@@ -253,9 +418,15 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         engine.bass.resonance.store ((float) (double) p.getProperty ("resonance", (double) engine.bass.resonance.load()));
         engine.bass.decayMs.store   ((float) (double) p.getProperty ("length",    (double) engine.bass.decayMs.load()));
         engine.bass.volume.store   ((float) (double) p.getProperty ("volume",    (double) engine.bass.volume.load()));
+        engine.bass.delaySend.store ((float) (double) p.getProperty ("delaySend", (double) engine.bass.delaySend.load()));
         engine.bass.useAMMode.store ((bool) p.getProperty ("useAM", engine.bass.useAMMode.load()));
         engine.bass.amRatio.store  ((float) (double) p.getProperty ("amRatio",   (double) engine.bass.amRatio.load()));
         engine.bass.amDepth.store  ((float) (double) p.getProperty ("amDepth",   (double) engine.bass.amDepth.load()));
+        engine.bass.pitchEnvAmount.store ((float) (double) p.getProperty ("pitchEnvAmount", (double) engine.bass.pitchEnvAmount.load()));
+        engine.bass.pitchEnvDecayMs.store ((float) (double) p.getProperty ("pitchEnvDecayMs", (double) engine.bass.pitchEnvDecayMs.load()));
+        engine.bass.filterEnvAmount.store ((float) (double) p.getProperty ("filterEnvAmount", (double) engine.bass.filterEnvAmount.load()));
+        engine.bass.filterEnvDecayMs.store ((float) (double) p.getProperty ("filterEnvDecayMs", (double) engine.bass.filterEnvDecayMs.load()));
+        engine.bass.driveTransientAmount.store ((float) (double) p.getProperty ("driveTransientAmount", (double) engine.bass.driveTransientAmount.load()));
 
         auto* bankArr = bassVar.getProperty ("patternBank", juce::var()).getArray();
         if (bankArr != nullptr)
@@ -281,6 +452,7 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         engine.skank.drive.store     ((float) (double) p.getProperty ("drive",  (double) engine.skank.drive.load()));
         engine.skank.minorChord.store ((bool) p.getProperty ("minor", engine.skank.minorChord.load()));
         engine.skank.volume.store    ((float) (double) p.getProperty ("volume", (double) engine.skank.volume.load()));
+        engine.skank.delaySend.store ((float) (double) p.getProperty ("delaySend", (double) engine.skank.delaySend.load()));
 
         auto* bankArr = skankVar.getProperty ("patternBank", juce::var()).getArray();
         if (bankArr != nullptr)
@@ -290,6 +462,14 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
                 auto slotVar = (*bankArr)[i];
                 patternFromVar (slotVar.getProperty ("pattern", juce::var()), engine.skankBank[(size_t) i].steps);
                 curveFromVar (slotVar.getProperty ("sawMixCurve", juce::var()), engine.skankBank[(size_t) i].sawMixCurve);
+
+                // absent entirely = legacy save from before per-step chord
+                // quality existed - every step defaults to major (false),
+                // already correct from construction
+                auto* chordArr = slotVar.getProperty ("chordIsMinor", juce::var()).getArray();
+                if (chordArr != nullptr)
+                    for (int step = 0; step < StepPattern::maxLength && step < chordArr->size(); ++step)
+                        engine.skankBank[(size_t) i].setChordIsMinor (step, (bool) (*chordArr)[step]);
             }
             engine.setCurrentSkankPatternIndex ((int) skankVar.getProperty ("currentPatternIndex", 0));
         }
@@ -299,6 +479,48 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
             patternFromVar (skankVar.getProperty ("pattern", juce::var()), engine.skankBank[0].steps);
             curveFromVar (skankVar.getProperty ("sawMixCurve", juce::var()), engine.skankBank[0].sawMixCurve);
             engine.setCurrentSkankPatternIndex (0);
+        }
+    }
+
+    auto snareVar = rootVar.getProperty ("snare", juce::var());
+    if (snareVar.isObject())
+    {
+        auto p = snareVar.getProperty ("params", juce::var());
+        engine.snare.tuneHz.store    ((float) (double) p.getProperty ("tune",      (double) engine.snare.tuneHz.load()));
+        engine.snare.noiseMix.store  ((float) (double) p.getProperty ("noiseMix",  (double) engine.snare.noiseMix.load()));
+        engine.snare.cutoffHz.store  ((float) (double) p.getProperty ("cutoff",    (double) engine.snare.cutoffHz.load()));
+        engine.snare.resonance.store ((float) (double) p.getProperty ("resonance", (double) engine.snare.resonance.load()));
+        engine.snare.decayMs.store   ((float) (double) p.getProperty ("decay",     (double) engine.snare.decayMs.load()));
+        engine.snare.drive.store     ((float) (double) p.getProperty ("drive",     (double) engine.snare.drive.load()));
+        engine.snare.volume.store    ((float) (double) p.getProperty ("volume",    (double) engine.snare.volume.load()));
+        engine.snare.delaySend.store ((float) (double) p.getProperty ("delaySend", (double) engine.snare.delaySend.load()));
+
+        auto* bankArr = snareVar.getProperty ("patternBank", juce::var()).getArray();
+        if (bankArr != nullptr)
+        {
+            for (int i = 0; i < AudioEngine::bankSize && i < bankArr->size(); ++i)
+                patternFromVar ((*bankArr)[i], engine.snareBank[(size_t) i]);
+            engine.setCurrentSnarePatternIndex ((int) snareVar.getProperty ("currentPatternIndex", 0));
+        }
+    }
+
+    auto hihatVar = rootVar.getProperty ("hihat", juce::var());
+    if (hihatVar.isObject())
+    {
+        auto p = hihatVar.getProperty ("params", juce::var());
+        engine.hihat.cutoffHz.store  ((float) (double) p.getProperty ("cutoff",    (double) engine.hihat.cutoffHz.load()));
+        engine.hihat.resonance.store ((float) (double) p.getProperty ("resonance", (double) engine.hihat.resonance.load()));
+        engine.hihat.decayMs.store   ((float) (double) p.getProperty ("decay",     (double) engine.hihat.decayMs.load()));
+        engine.hihat.drive.store     ((float) (double) p.getProperty ("drive",     (double) engine.hihat.drive.load()));
+        engine.hihat.volume.store    ((float) (double) p.getProperty ("volume",    (double) engine.hihat.volume.load()));
+        engine.hihat.delaySend.store ((float) (double) p.getProperty ("delaySend", (double) engine.hihat.delaySend.load()));
+
+        auto* bankArr = hihatVar.getProperty ("patternBank", juce::var()).getArray();
+        if (bankArr != nullptr)
+        {
+            for (int i = 0; i < AudioEngine::bankSize && i < bankArr->size(); ++i)
+                patternFromVar ((*bankArr)[i], engine.hihatBank[(size_t) i]);
+            engine.setCurrentHiHatPatternIndex ((int) hihatVar.getProperty ("currentPatternIndex", 0));
         }
     }
 
@@ -313,13 +535,16 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
             gp.kickIndex = (int) slotVar.getProperty ("kick", 0);
             gp.bassIndex = (int) slotVar.getProperty ("bass", 0);
             gp.skankIndex = (int) slotVar.getProperty ("skank", 0);
-            // absent entirely = legacy save from before overrides existed - defaults (no override) are already correct
-            gp.bassDriveOverride.active.store ((bool) slotVar.getProperty ("bassDriveOverrideActive", false));
-            gp.bassDriveOverride.value.store ((float) (double) slotVar.getProperty ("bassDriveOverrideValue", 0.0));
-            gp.bassCutoffOverride.active.store ((bool) slotVar.getProperty ("bassCutoffOverrideActive", false));
-            gp.bassCutoffOverride.value.store ((float) (double) slotVar.getProperty ("bassCutoffOverrideValue", 0.0));
-            gp.skankDecayOverride.active.store ((bool) slotVar.getProperty ("skankDecayOverrideActive", false));
-            gp.skankDecayOverride.value.store ((float) (double) slotVar.getProperty ("skankDecayOverrideValue", 0.0));
+            gp.snareIndex = (int) slotVar.getProperty ("snare", 0);
+            gp.hihatIndex = (int) slotVar.getProperty ("hihat", 0);
+            // absent entirely = legacy save from before overrides existed
+            // (or before they covered this instrument) - empty map is
+            // already correct (no overrides configured)
+            overrideMapFromVar (slotVar.getProperty ("bassOverrides", juce::var()), gp.bassOverrides);
+            overrideMapFromVar (slotVar.getProperty ("kickOverrides", juce::var()), gp.kickOverrides);
+            overrideMapFromVar (slotVar.getProperty ("skankOverrides", juce::var()), gp.skankOverrides);
+            overrideMapFromVar (slotVar.getProperty ("snareOverrides", juce::var()), gp.snareOverrides);
+            overrideMapFromVar (slotVar.getProperty ("hihatOverrides", juce::var()), gp.hihatOverrides);
         }
     }
     // absent entirely = legacy save from before Global Patterns existed - leave all slots unused, nothing to migrate

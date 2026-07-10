@@ -16,15 +16,18 @@ void SkankSynth::resetToDefaults()
     drive.store (0.3f);
     minorChord.store (false);
     volume.store (1.0f);
+    delaySend.store (0.0f);
 }
 
-void SkankSynth::triggerChord (int semitoneOffset, float levelGain, float sawMixOverride, float decayOverride)
+void SkankSynth::triggerChord (int semitoneOffset, float levelGain, float sawMixOverride,
+                                const SkankVoicingOverrides& overrides, int minorOverride)
 {
     active = true;
     t = 0.0;
 
-    double root = (double) tuneHz.load() * std::pow (2.0, semitoneOffset / 12.0);
-    bool minor = minorChord.load();
+    float tuneKnob = (overrides.tuneHz >= 0.0f) ? overrides.tuneHz : tuneHz.load();
+    double root = (double) tuneKnob * std::pow (2.0, semitoneOffset / 12.0);
+    bool minor = (minorOverride >= 0) ? (minorOverride != 0) : minorChord.load();
     double thirdSemitones = minor ? 3.0 : 4.0;
 
     voices[0].phase = 0.0;
@@ -34,9 +37,10 @@ void SkankSynth::triggerChord (int semitoneOffset, float levelGain, float sawMix
     voices[2].phase = 0.0;
     voices[2].freq = root * std::pow (2.0, 7.0 / 12.0);
 
-    float decayKnob = (decayOverride >= 0.0f) ? decayOverride : decayMs.load();
+    float decayKnob = (overrides.decayMs >= 0.0f) ? overrides.decayMs : decayMs.load();
     decayTau = juce::jmax (0.02, (double) decayKnob / 1000.0);
-    driveAmt = (double) drive.load();
+    float driveKnob = (overrides.drive >= 0.0f) ? overrides.drive : drive.load();
+    driveAmt = (double) driveKnob;
     sawMixAmt = (sawMixOverride >= 0.0f) ? (double) sawMixOverride : (double) sawMix.load();
     triggerGain = (double) levelGain;
 }

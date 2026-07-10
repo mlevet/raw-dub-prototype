@@ -27,6 +27,12 @@ target_sources(RawDubPrototype PRIVATE
     Source/BassSynth.cpp
     Source/SkankSynth.h
     Source/SkankSynth.cpp
+    Source/SnareSynth.h
+    Source/SnareSynth.cpp
+    Source/HiHatSynth.h
+    Source/HiHatSynth.cpp
+    Source/DubDelay.h
+    Source/DubDelay.cpp
     Source/PointCurve.h
     Source/SkankPatternSlot.h
     Source/StepPattern.h

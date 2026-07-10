@@ -34,5 +34,29 @@ public:
         g.setColour (juce::Colours::black);
         g.drawRect (bounds, shouldDrawButtonAsDown ? 2.0f : 1.0f);
     }
+
+    // Same flat, no-gradient language as the step buttons ("trigs") and
+    // drawButtonBackground above - a solid black rectangle on a white
+    // track, no rounded ends, no shading. thumbSize == 0 means "content
+    // fits, nothing to scroll" (Viewport's own state) - drawn as nothing
+    // but the track, same as an empty/inactive control elsewhere in this
+    // app rather than a thumb squeezed to some minimum size.
+    void drawScrollbar (juce::Graphics& g, juce::ScrollBar& /*scrollbar*/, int x, int y, int width, int height,
+                         bool isScrollbarVertical, int thumbStartPosition, int thumbSize,
+                         bool /*isMouseOver*/, bool /*isMouseDown*/) override
+    {
+        juce::Rectangle<int> track (x, y, width, height);
+        g.setColour (juce::Colours::white);
+        g.fillRect (track);
+
+        if (thumbSize <= 0)
+            return;
+
+        auto thumb = isScrollbarVertical
+            ? juce::Rectangle<int> (x, thumbStartPosition, width, thumbSize)
+            : juce::Rectangle<int> (thumbStartPosition, y, thumbSize, height);
+        g.setColour (juce::Colours::black);
+        g.fillRect (thumb);
+    }
 };
 }

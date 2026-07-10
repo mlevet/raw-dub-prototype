@@ -4,20 +4,47 @@
 
 namespace RawDub
 {
+// -1 (default) on any field means "use the matching knob"; otherwise use
+// this instead for this note. Replaces what used to be individual
+// driveOverride/cutoffOverride/resonanceOverride trigger() parameters -
+// that shape stopped scaling once curve resolution needed to supply a
+// per-note value for every continuous Bass parameter (see ParamID.h,
+// BassParamID), not just the three that had section overrides. Same
+// sentinel convention as SkankSynth's sawMixOverride, and the same
+// resolution order regardless of source: instrument base value -> section
+// override (if active) -> pattern curve (if present, wins) - see
+// project_raw_dub_song_architecture memory. Callers (AudioEngine) collapse
+// whichever of those applies into a single float per field before calling
+// trigger() - BassSynth itself has no idea whether a given value came from
+// a curve, an override, or is just the base knob passed through.
+//
+// decayMs (Length) and tuneHz are included even though they don't have
+// pre-existing section overrides today - once curve resolution needed to
+// exist for any of them, giving every continuous Bass param the same
+// override slot was simpler than a special case per pre-existing vs. new.
+// Volume is deliberately absent - it's a continuously-read per-block
+// mixing control, not a trigger-time snapshot, so it doesn't fit this
+// mechanism (see BassSynth::volume's comment).
+struct BassVoicingOverrides
+{
+    float tuneHz = -1.0f;
+    float drive = -1.0f;
+    float cutoffHz = -1.0f;
+    float resonance = -1.0f;
+    float decayMs = -1.0f;
+    float amDepth = -1.0f;
+    float pitchEnvAmount = -1.0f;
+    float pitchEnvDecayMs = -1.0f;
+    float filterEnvAmount = -1.0f;
+    float filterEnvDecayMs = -1.0f;
+    float driveTransientAmount = -1.0f;
+};
+
 class BassSynth
 {
 public:
     void prepare (double sampleRate);
-    // driveOverride/cutoffOverride: -1 (default) means "use the Drive/
-    // Cutoff knob"; otherwise use this instead for this note - how a
-    // Global Pattern's section-level voicing override feeds in (see
-    // project_raw_dub_song_architecture memory: instrument params are
-    // the track's base identity, Global Pattern overrides are section
-    // variations). Same sentinel convention as SkankSynth's
-    // sawMixOverride. Volume deliberately has no override yet - it's a
-    // real-time mixing control, not a per-note voicing snapshot like
-    // these two, and belongs to a future mixer/performance layer.
-    void trigger (int semitoneOffset = 0, float levelGain = 1.0f, float driveOverride = -1.0f, float cutoffOverride = -1.0f);
+    void trigger (int semitoneOffset = 0, float levelGain = 1.0f, const BassVoicingOverrides& overrides = {});
     void renderAdd (float* out, int numSamples);
     void resetToDefaults(); // for "New Project" - restores every param to its shipped default
 
@@ -64,6 +91,71 @@ public:
     std::atomic<float> amDepth { 0.8f }; // AM mode only, 0-1, safe at any value
 
     std::atomic<float> volume { 1.0f }; // basic level balancing against Kick, 0-1, applied before the master limiter
+    // Instrument-level send to DubDelay - "which instruments feed the
+    // delay," resolved once per instrument, not per-step/per-pattern
+    // yet (see AudioEngine::renderNextBlock and DELAY_FEEDBACK_LOOP_
+    // ANALYSIS.txt). Off by default - the whole point is choosing which
+    // instruments feed the loop, so nothing is routed there unopted-in.
+    std::atomic<float> delaySend { 0.0f };
+
+    // Transient Behaviour Experiment A - Pitch settling
+    // (BASS_DUB_PRESSURE_ANALYSIS.txt section 6, "one musical phenomenon
+    // = one module"): transient-only pitch drop at note onset,
+    // exponential decay to the stable target pitch. "A note should come
+    // alive during its first 30-100ms, then settle into an unwavering,
+    // powerful sustain" - the sustain pitch is untouched, only the
+    // attack window bends. Decay was promoted from a fixed internal
+    // constant to an exposed control once listening proved it a real,
+    // independent musical axis (three separate passes - 50/100/150ms -
+    // moved the result between "percussive/kick-like" and "settling
+    // into place" at a FIXED Amount) - this is why Pitch gets both
+    // Amount and Decay while Drive Transient below still doesn't.
+    //
+    // Amount default lowered 3.0 -> 1.0 -> 0.5 by listening: at 3
+    // semitones the pitch movement itself became audible/kick-like,
+    // working against the goal ("perceive additional weight," not hear
+    // a pitch bend). Confirmed once Filter Envelope existed: the most
+    // convincing sound combines a very small Pitch Env (0.3-0.8
+    // semitone) with a subtle Filter Env, NOT Pitch Env carrying the
+    // transient alone at a larger amount. Boundary to stay inside: if
+    // the pitch movement becomes audible as a bend, this has drifted
+    // from UK dub toward dubstep territory.
+    std::atomic<float> pitchEnvAmount { 0.5f };  // semitones, 0-12 - keep within ~0.3-0.8
+    std::atomic<float> pitchEnvDecayMs { 100.0f }; // ms - settled representative value, not yet re-tuned since becoming exposed
+
+    // Transient Behaviour Experiment B - Filter opening/closing. Second
+    // facet of the same phenomenon as Pitch above - cutoff opens
+    // briefly above the base Cutoff at note onset, exponential decay
+    // back down. Positive only (opens, never closes below base) for
+    // now - attack only, no sustained modulation, no wobble. Decay
+    // exposed alongside Amount from the start (unlike Pitch, which only
+    // gained it after proving the need) - filter envelope decay is one
+    // of the most standard expressive controls in subtractive synthesis
+    // generally and occupies the identical structural role Pitch
+    // Decay's proven role does, so it was treated as presumptively
+    // needed rather than waiting to re-derive the same lesson twice.
+    //
+    // Amount confirmed by listening once Pitch Envelope also existed:
+    // the most convincing sound pairs a subtle Filter Env (roughly
+    // 200-400Hz) with a very small Pitch Env - not either one carrying
+    // the transient alone.
+    std::atomic<float> filterEnvAmount { 300.0f };  // Hz added to Cutoff at note onset, 0-3000 - keep within ~200-400 for now
+    std::atomic<float> filterEnvDecayMs { 60.0f };  // ms - first guess, not yet listened to independently
+
+    // Transient Behaviour Experiment C - Drive briefly richer at note
+    // onset, decaying back to the normal Drive knob value: the circuit
+    // behaving differently during the transient, not "another envelope"
+    // bolted on. Drive mode only (AM mode already bypasses Drive/warmth
+    // entirely). Amount promoted from a fixed internal constant to an
+    // exposed control for the same reason Pitch Decay was - it had
+    // already been adjusted twice via listening (0.12 -> 0.06), which is
+    // itself the evidence a parameter is real, not speculative. Decay
+    // stays internal for now (transientDriveDecaySeconds, private below)
+    // - unlike Pitch/Filter, no listening pass has yet shown Decay is an
+    // independent axis here; promote it only if one does, per "minimum
+    // musical concepts, not minimum parameters" - Amount was proven,
+    // Decay hasn't been (yet).
+    std::atomic<float> driveTransientAmount { 0.06f }; // added to Drive at note onset, 0-1
 
 private:
     // Locked 1:1 AM produces an asymmetric waveform - a brief high peak,
@@ -77,7 +169,7 @@ private:
     // actually heard, reduce the dB value here, don't add a UI control.
     static constexpr double amMakeupGainDb = 5.0;
     static constexpr double amMakeupGain = 1.7783; // 10^(amMakeupGainDb/20), precomputed to avoid a runtime pow() in the audio callback
-    void applyTrigger (int semitoneOffset, float levelGain, float driveOverride, float cutoffOverride);
+    void applyTrigger (int semitoneOffset, float levelGain, const BassVoicingOverrides& overrides);
 
     double sampleRate = 44100.0;
     bool active = false;
@@ -85,6 +177,16 @@ private:
     double modPhase = 0.0; // AM mode only - locked to phase by amRatio, no independent drift
     double t = 0.0;
     double freq = 55.0;
+    double pitchEnvAmountSnapshot = 0.5;   // semitones, read once at trigger time like every other param
+    double pitchEnvDecaySecondsSnapshot = 0.10;  // read once at trigger time - see pitchEnvDecayMs
+    double filterEnvAmountSnapshot = 300.0; // Hz, read once at trigger time
+    double filterEnvDecaySecondsSnapshot = 0.06; // read once at trigger time - see filterEnvDecayMs
+    double baseCutoffSnapshot = 1200.0; // Hz - the resolved (override-or-knob) Cutoff before the envelope is added; svfF is now recomputed every sample in renderAdd rather than once here, since the envelope makes cutoff move within the note
+
+    double driveTransientAmountSnapshot = 0.06; // read once at trigger time - see driveTransientAmount
+    // Fixed, not exposed yet - see driveTransientAmount's comment.
+    // Unchanged since Experiment C was first built.
+    static constexpr double transientDriveDecaySeconds = 0.07;
     double amRatioSnapshot = 1.0;
     double amDepthSnapshot = 0.8;
     bool amModeSnapshot = false; // read once at trigger time, like every other param
@@ -112,8 +214,7 @@ private:
     double chokeT = 0.0;
     int pendingSemitoneOffset = 0;
     float pendingLevelGain = 1.0f;
-    float pendingDriveOverride = -1.0f;
-    float pendingCutoffOverride = -1.0f;
+    BassVoicingOverrides pendingOverrides;
 
     // Reverted to 0.6 (was 0.85) - raising it made an existing click at
     // note onset more audible without adding "authority," so the extra

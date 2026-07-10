@@ -94,8 +94,16 @@ MainComponent::MainComponent()
                     kickViewPage = 0;
                     bassViewPage = 0;
                     skankViewPage = 0;
+                    snareViewPage = 0;
+                    hihatViewPage = 0;
                     engine.setCurrentGlobalPatternSlot (0);
                     tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
+                    refreshBassPitchViewport (true);
+                    refreshSkankPitchViewport (true);
+                    // a freshly loaded project should start fully calm,
+                    // regardless of whatever was expanded before loading
+                    for (auto* row : allCurveableRows)
+                        row->curveExpanded = false;
                     refreshParamSlidersFromEngine();
                     refreshStepColours();
                     skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
@@ -119,8 +127,16 @@ MainComponent::MainComponent()
                 kickViewPage = 0;
                 bassViewPage = 0;
                 skankViewPage = 0;
+                snareViewPage = 0;
+                hihatViewPage = 0;
                 engine.setCurrentGlobalPatternSlot (0);
                 tempoSlider.setValue (engine.getTempoBpm(), juce::dontSendNotification);
+                refreshBassPitchViewport (true);
+                refreshSkankPitchViewport (true);
+                // a new project should start fully calm, regardless of
+                // whatever was expanded before
+                for (auto* row : allCurveableRows)
+                    row->curveExpanded = false;
                 refreshParamSlidersFromEngine();
                 refreshStepColours();
                 skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
@@ -142,13 +158,16 @@ MainComponent::MainComponent()
             kickViewPage = 0;
             bassViewPage = 0;
             skankViewPage = 0;
+            snareViewPage = 0;
+            hihatViewPage = 0;
+            refreshBassPitchViewport (true);
+            refreshSkankPitchViewport (true);
             refreshStepColours();
             skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
             skankSawMixLaneEditor.repaint();
             resized();
         }
-        refreshBassOverrideControls(); // different section, possibly different override state
-        refreshSkankOverrideControls();
+        refreshAllOverrideControls(); // different section, possibly different override state - also refreshes each row's curve state (see refreshOverrideControls)
         refreshPatternSharingIndicators();
         refreshGlobalPatternButtons();
     };
@@ -188,8 +207,7 @@ MainComponent::MainComponent()
         engine.saveCurrentAsGlobalPattern (freeSlot);
         engine.copySectionVoicingOverrides (sourceSlot, freeSlot);
         engine.setCurrentGlobalPatternSlot (freeSlot);
-        refreshBassOverrideControls();
-        refreshSkankOverrideControls();
+        refreshAllOverrideControls();
         refreshPatternSharingIndicators();
         refreshGlobalPatternButtons();
     };
@@ -198,16 +216,15 @@ MainComponent::MainComponent()
     clearGlobalPatternButton.onClick = [this]
     {
         engine.clearGlobalPattern (engine.getCurrentGlobalPatternSlot());
-        refreshBassOverrideControls();
-        refreshSkankOverrideControls();
+        refreshAllOverrideControls();
         refreshGlobalPatternButtons();
     };
 
     // --- Instrument tabs: only one instrument's section is shown at a
     // time, not all three stacked/scrolled ---
     {
-        const char* names[3] = { "Kick", "Bass", "Skank" };
-        for (int i = 0; i < 3; ++i)
+        const char* names[6] = { "Kick", "Bass", "Skank", "Snare", "Hi-Hat", "Delay" };
+        for (int i = 0; i < 6; ++i)
         {
             auto& btn = instrumentTabButtons[(size_t) i];
             btn.setButtonText (names[i]);
@@ -216,11 +233,18 @@ MainComponent::MainComponent()
         }
     }
 
+    // pageViewport/pageContent - see MainComponent.h's comment on
+    // pageContent. Every component added below (Kick through Delay) is a
+    // child of pageContent, not of MainComponent directly.
+    addAndMakeVisible (pageViewport);
+    pageViewport.setViewedComponent (&pageContent, false); // false: pageContent is a member, not owned/deleted by the Viewport
+    pageViewport.setScrollBarThickness (14);
+
     // --- Kick ---
-    addAndMakeVisible (kickTriggerButton);
+    pageContent.addAndMakeVisible (kickTriggerButton);
     kickTriggerButton.onClick = [this] { engine.requestManualKickTrigger(); };
 
-    addAndMakeVisible (kickClearButton);
+    pageContent.addAndMakeVisible (kickClearButton);
     kickClearButton.onClick = [this]
     {
         engine.kickPattern().clearAll();
@@ -230,7 +254,7 @@ MainComponent::MainComponent()
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         auto& btn = kickStepButtons[(size_t) s];
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         // local slot s maps to (kickViewPage*numSteps + s) in the pattern -
         // read kickViewPage fresh each click, not captured, so it always
         // reflects whichever page is showing
@@ -245,12 +269,12 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (kickLengthLabel);
+    pageContent.addAndMakeVisible (kickLengthLabel);
     for (int i = 0; i < 4; ++i)
     {
         auto& btn = kickLengthButtons[(size_t) i];
         btn.setButtonText (juce::String (lengthOptions[i]));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, i] { setVoiceLength (engine.kickPattern(), lengthOptions[i], kickViewPage); };
     }
 
@@ -258,7 +282,7 @@ MainComponent::MainComponent()
     {
         auto& btn = kickPageButtons[(size_t) p];
         btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, p]
         {
             kickViewPage = p;
@@ -266,12 +290,12 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (kickPatternBankLabel);
+    pageContent.addAndMakeVisible (kickPatternBankLabel);
     for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
     {
         auto& btn = kickPatternBankButtons[(size_t) i];
         btn.setButtonText (juce::String (i + 1)); // 1-indexed display
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, i]
         {
             engine.setCurrentKickPatternIndex (i);
@@ -282,8 +306,8 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (kickSharedLabel);
-    addAndMakeVisible (kickMakeUniqueButton);
+    pageContent.addAndMakeVisible (kickSharedLabel);
+    pageContent.addAndMakeVisible (kickMakeUniqueButton);
     kickMakeUniqueButton.onClick = [this]
     {
         engine.makeKickPatternUnique();
@@ -291,61 +315,134 @@ MainComponent::MainComponent()
         refreshGlobalPatternButtons();
     };
 
-    addAndMakeVisible (kickTitleLabel);
+    pageContent.addAndMakeVisible (kickTitleLabel);
     kickTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
     {
-        ParamSpec specs[5] = {
-            { "Tune",   &engine.kick.tuneHz,  30.0, 150.0, 1.0  },
-            { "Punch",  &engine.kick.punchMs, 5.0,  120.0, 1.0  },
-            { "Decay",  &engine.kick.decayMs, 50.0, 800.0, 1.0  },
-            { "Drive",  &engine.kick.drive,   0.0,  1.0,   0.01 },
-            { "Volume", &engine.kick.volume,  0.0,  1.0,   0.01 },
+        using RawDub::KickParamID;
+        auto kickPattern = [this]() -> RawDub::StepPattern& { return engine.kickPattern(); };
+        auto kickOverrides = [this]() -> RawDub::AudioEngine::OverrideMap& { return engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()].kickOverrides; };
+
+        // currentInstrumentTab 0 = Kick, see switchInstrumentTab.
+        setupCurveableParam (kickCurveRows[0], "Tune",       engine.kick.tuneHz,    30.0, 150.0, 1.0,  (int) KickParamID::Tune,      0, kickPattern, kickOverrides);
+        setupCurveableParam (kickCurveRows[1], "Punch",      engine.kick.punchMs,   5.0,  120.0, 1.0,  (int) KickParamID::Punch,     0, kickPattern, kickOverrides);
+        setupCurveableParam (kickCurveRows[2], "Decay",      engine.kick.decayMs,   50.0, 800.0, 1.0,  (int) KickParamID::Decay,     0, kickPattern, kickOverrides);
+        setupCurveableParam (kickCurveRows[3], "Drive",      engine.kick.drive,     0.0,  1.0,   0.01, (int) KickParamID::Drive,     0, kickPattern, kickOverrides);
+        setupCurveableParam (kickCurveRows[4], "Delay Send", engine.kick.delaySend, 0.0,  1.0,   0.01, (int) KickParamID::DelaySend, 0, kickPattern, kickOverrides);
+
+        // Volume - continuously-read mixing control, plain row, see
+        // kickPlainRows' comment in MainComponent.h.
+        ParamSpec plainSpecs[1] = {
+            { "Volume", &engine.kick.volume, 0.0, 1.0, 0.01 },
         };
-
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < 1; ++i)
         {
-            auto& row = kickParamRows[(size_t) i];
+            auto& row = kickPlainRows[(size_t) i];
 
-            addAndMakeVisible (row.label);
-            row.label.setText (specs[i].name, juce::dontSendNotification);
+            pageContent.addAndMakeVisible (row.label);
+            row.label.setText (plainSpecs[i].name, juce::dontSendNotification);
 
-            addAndMakeVisible (row.slider);
+            pageContent.addAndMakeVisible (row.slider);
             row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setScrollWheelEnabled (false); // page now scrolls under the mouse - a slider must never eat that wheel event
             row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
-            row.slider.setRange (specs[i].minV, specs[i].maxV, specs[i].step);
-            row.slider.setValue ((double) specs[i].param->load(), juce::dontSendNotification);
+            row.slider.setRange (plainSpecs[i].minV, plainSpecs[i].maxV, plainSpecs[i].step);
+            row.slider.setValue ((double) plainSpecs[i].param->load(), juce::dontSendNotification);
 
-            auto* param = specs[i].param;
+            auto* param = plainSpecs[i].param;
             auto* slider = &row.slider;
             row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
         }
     }
 
     // --- Bass ---
-    addAndMakeVisible (bassTriggerButton);
+    pageContent.addAndMakeVisible (bassTriggerButton);
     bassTriggerButton.onClick = [this] { engine.requestManualBassTrigger(); };
 
-    addAndMakeVisible (bassClearButton);
+    pageContent.addAndMakeVisible (bassClearButton);
     bassClearButton.onClick = [this]
     {
-        engine.bassPattern().clearAll();
+        engine.bassPattern().clearAll(); // also clears this pattern's curves - see StepPattern::clearAll
+        refreshBassPitchViewport (true); // nothing left to show - back to the default center
         refreshStepColours();
+        for (auto& row : bassCurveRows)
+            refreshCurveRow (row);
+        resized();
     };
 
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
         auto& btn = bassStepButtons[(size_t) s];
         btn.setHasPitch (true);
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onToggle = [this, s]
         {
-            engine.bassPattern().toggle (bassViewPage * RawDub::numSteps + s);
+            int stepIndex = bassViewPage * RawDub::numSteps + s;
+            engine.bassPattern().toggle (stepIndex);
+            // newly activated steps default to wherever you're currently
+            // looking, not always the root - matches the existing
+            // precedent that toggling on already resets level to Normal
+            if (engine.bassPattern().isOn (stepIndex))
+                engine.bassPattern().setSemitoneOffset (stepIndex, bassPitchViewportMin + pitchViewportSize / 2);
             refreshStepColours();
         };
-        btn.onPitchDrag = [this, s] (int offset)
+        btn.onPitchDrag = [this, s] (int offset, int edgeDirection)
         {
-            engine.bassPattern().setSemitoneOffset (bassViewPage * RawDub::numSteps + s, offset);
+            int stepIndex = bassViewPage * RawDub::numSteps + s;
+            bassDraggingStepIndex = stepIndex;
+
+            if (edgeDirection != 0)
+            {
+                // held in the edge zone - the timer takes over driving
+                // both the offset and the viewport from here (see
+                // tickPitchEdgeScroll/timerCallback)
+                bassPitchEdgeScrollDirection = edgeDirection;
+                bassPitchEdgeScrollStepIndex = stepIndex;
+                return;
+            }
+            bassPitchEdgeScrollDirection = 0;
+
+            engine.bassPattern().setSemitoneOffset (stepIndex, offset);
+            refreshBassGuideLines(); // reflect the live-updated pitch as you drag
+
+            // fallback for a fast/coalesced move that jumps straight past
+            // the window without ever registering inside the edge zone -
+            // scroll by the minimum amount needed to keep it in view
+            if (offset < bassPitchViewportMin)
+                bassPitchViewportMin = offset;
+            else if (offset > bassPitchViewportMin + pitchViewportSize)
+                bassPitchViewportMin = offset - pitchViewportSize;
+            else
+                return;
+            refreshBassPitchViewport (false);
+        };
+        btn.onPitchDragEnd = [this]
+        {
+            bassDraggingStepIndex = -1;
+            refreshBassGuideLines(); // hides again unless still hovering an active step
+        };
+        btn.onHoverChanged = [this, s] (bool entering)
+        {
+            bassHoveredStepIndex = entering ? (bassViewPage * RawDub::numSteps + s) : -1;
+            refreshBassGuideLines();
+        };
+        btn.onPitchWheel = [this] (float wheelDeltaY)
+        {
+            // trackpad/wheel scroll over the grid, independent of dragging
+            // a note - deltaY sign convention: positive = scroll up.
+            // Accumulate rather than round-and-discard each event: most
+            // deltas are well under 1.0, so computing a fresh
+            // round(delta * scale) every single call rounds to zero
+            // every time for a gentle scroll and it never goes anywhere.
+            bassPitchWheelAccumulator += wheelDeltaY * 24.0f;
+            int semitoneShift = (int) bassPitchWheelAccumulator;
+            if (semitoneShift == 0)
+                return;
+            bassPitchWheelAccumulator -= (float) semitoneShift;
+            bassPitchViewportMin = juce::jlimit (-RawDub::StepPattern::maxSemitoneOffset,
+                                                  RawDub::StepPattern::maxSemitoneOffset - pitchViewportSize,
+                                                  bassPitchViewportMin + semitoneShift);
+            refreshBassPitchViewport (false);
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
@@ -353,12 +450,12 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (bassLengthLabel);
+    pageContent.addAndMakeVisible (bassLengthLabel);
     for (int i = 0; i < 4; ++i)
     {
         auto& btn = bassLengthButtons[(size_t) i];
         btn.setButtonText (juce::String (lengthOptions[i]));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, i] { setVoiceLength (engine.bassPattern(), lengthOptions[i], bassViewPage); };
     }
 
@@ -366,7 +463,7 @@ MainComponent::MainComponent()
     {
         auto& btn = bassPageButtons[(size_t) p];
         btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, p]
         {
             bassViewPage = p;
@@ -374,35 +471,49 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (bassPatternBankLabel);
+    pageContent.addAndMakeVisible (bassPitchRangeLabel);
+    bassPitchRangeLabel.setJustificationType (juce::Justification::centredRight);
+
+    pageContent.addAndMakeVisible (bassPatternBankLabel);
     for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
     {
         auto& btn = bassPatternBankButtons[(size_t) i];
         btn.setButtonText (juce::String (i + 1));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, i]
         {
             engine.setCurrentBassPatternIndex (i);
             bassViewPage = 0;
+            refreshBassPitchViewport (true);
             refreshStepColours();
             refreshPatternSharingIndicators();
+            // curves are pattern-scoped (see StepPattern::curves) - a
+            // different Bass pattern may have entirely different curves
+            // active, so every row's toggle/editor visibility needs
+            // resyncing, not just the step grid.
+            for (auto& row : bassCurveRows)
+                refreshCurveRow (row);
             resized();
         };
     }
 
-    addAndMakeVisible (bassSharedLabel);
-    addAndMakeVisible (bassMakeUniqueButton);
+    pageContent.addAndMakeVisible (bassSharedLabel);
+    pageContent.addAndMakeVisible (bassMakeUniqueButton);
     bassMakeUniqueButton.onClick = [this]
     {
         engine.makeBassPatternUnique();
+        refreshBassPitchViewport (true);
         refreshPatternSharingIndicators();
         refreshGlobalPatternButtons();
+        for (auto& row : bassCurveRows)
+            refreshCurveRow (row);
+        resized();
     };
 
-    addAndMakeVisible (bassTitleLabel);
+    pageContent.addAndMakeVisible (bassTitleLabel);
     bassTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
-    addAndMakeVisible (bassHarmonicModeButton);
+    pageContent.addAndMakeVisible (bassHarmonicModeButton);
     bassHarmonicModeButton.onClick = [this]
     {
         bool nowAM = ! engine.bass.useAMMode.load();
@@ -410,7 +521,7 @@ MainComponent::MainComponent()
         bassHarmonicModeButton.setButtonText (nowAM ? "Harmonic: AM" : "Harmonic: Drive");
     };
 
-    addAndMakeVisible (bassAmRatioLabel);
+    pageContent.addAndMakeVisible (bassAmRatioLabel);
 
     {
         const char* ratioLabels[3] = { "1:1", "2:1", "3:1" };
@@ -419,7 +530,7 @@ MainComponent::MainComponent()
         for (int i = 0; i < 3; ++i)
         {
             auto& b = bassAmRatioButtons[(size_t) i];
-            addAndMakeVisible (b);
+            pageContent.addAndMakeVisible (b);
             b.setButtonText (ratioLabels[i]);
             b.setClickingTogglesState (true);
             b.setRadioGroupId (5001);
@@ -431,98 +542,73 @@ MainComponent::MainComponent()
     }
 
     {
+        using RawDub::BassParamID;
+        // every continuous Bass param is curve+override-capable now (see
+        // project_raw_dub_song_architecture memory's 2026-07-10 entries) -
+        // getPattern/getOverrideMap are the same for all eleven rows, so
+        // defined once here rather than repeated per call.
+        auto bassPattern = [this]() -> RawDub::StepPattern& { return engine.bassPattern(); };
+        auto bassOverrides = [this]() -> RawDub::AudioEngine::OverrideMap& { return engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()].bassOverrides; };
+
         // ordered to match the signal chain: oscillator (Tune) -> Drive
-        // (saturation) -> filter (Cutoff/Resonance) -> envelope (Length).
-        // Length is hold time, not release speed - the release itself is
-        // a short fixed internal tail (see BassSynth::releaseTau). AM
-        // Depth only matters in AM mode (research switch, see
-        // BassSynth::useAMMode) - harmless when Drive mode is active.
-        ParamSpec specs[7] = {
-            { "Tune",      &engine.bass.tuneHz,    30.0,  120.0,  1.0  },
-            { "Drive",     &engine.bass.drive,     0.0,   1.0,    0.01 },
-            { "Cutoff",    &engine.bass.cutoffHz,  100.0, 4000.0, 10.0 },
-            { "Resonance", &engine.bass.resonance, 0.0,   0.95,   0.01 },
-            { "Length",    &engine.bass.decayMs,   50.0,  4000.0, 10.0 },
-            { "AM Depth",  &engine.bass.amDepth,   0.0,   1.0,    0.01 },
-            { "Volume",    &engine.bass.volume,    0.0,   1.0,    0.01 },
+        // (saturation) -> filter (Cutoff/Resonance) -> envelope (Length),
+        // AM Depth, then the three Transient modules. currentInstrumentTab
+        // 1 = Bass, see switchInstrumentTab.
+        setupCurveableParam (bassCurveRows[0], "Tune",   engine.bass.tuneHz,    30.0,  120.0,  1.0,  (int) BassParamID::Tune,   1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[1], "Drive",  engine.bass.drive,     0.0,   1.0,    0.01, (int) BassParamID::Drive,  1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[2], "Cutoff", engine.bass.cutoffHz,  100.0, 4000.0, 10.0, (int) BassParamID::Cutoff, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[3], "Resonance", engine.bass.resonance, 0.0, 0.95, 0.01,  (int) BassParamID::Resonance, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[4], "Length", engine.bass.decayMs,   50.0,  4000.0, 10.0, (int) BassParamID::Length, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[5], "AM Depth", engine.bass.amDepth, 0.0,   1.0,    0.01, (int) BassParamID::AmDepth, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[6], "Amount", engine.bass.pitchEnvAmount,   0.0, 12.0,   0.1,  (int) BassParamID::PitchEnvAmount, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[7], "Decay",  engine.bass.pitchEnvDecayMs,  10.0, 300.0, 5.0,  (int) BassParamID::PitchEnvDecay, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[8], "Amount", engine.bass.filterEnvAmount,  0.0, 3000.0, 10.0, (int) BassParamID::FilterEnvAmount, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[9], "Decay",  engine.bass.filterEnvDecayMs, 10.0, 300.0, 5.0,  (int) BassParamID::FilterEnvDecay, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[10], "Amount", engine.bass.driveTransientAmount, 0.0, 1.0, 0.01, (int) BassParamID::DriveTransientAmount, 1, bassPattern, bassOverrides);
+        setupCurveableParam (bassCurveRows[11], "Delay Send", engine.bass.delaySend, 0.0, 1.0, 0.01, (int) BassParamID::DelaySend, 1, bassPattern, bassOverrides);
+
+        // Volume - continuously-read mixing control, plain row, see
+        // bassPlainRows' comment in MainComponent.h.
+        ParamSpec plainSpecs[1] = {
+            { "Volume", &engine.bass.volume, 0.0, 1.0, 0.01 },
         };
-
-        for (int i = 0; i < 7; ++i)
+        for (int i = 0; i < 1; ++i)
         {
-            auto& row = bassParamRows[(size_t) i];
-
-            addAndMakeVisible (row.label);
-            row.label.setText (specs[i].name, juce::dontSendNotification);
-
-            addAndMakeVisible (row.slider);
+            auto& row = bassPlainRows[(size_t) i];
+            pageContent.addAndMakeVisible (row.label);
+            row.label.setText (plainSpecs[i].name, juce::dontSendNotification);
+            pageContent.addAndMakeVisible (row.slider);
             row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setScrollWheelEnabled (false); // page now scrolls under the mouse - a slider must never eat that wheel event
             row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
-            row.slider.setRange (specs[i].minV, specs[i].maxV, specs[i].step);
-            row.slider.setValue ((double) specs[i].param->load(), juce::dontSendNotification);
-
-            auto* param = specs[i].param;
+            row.slider.setRange (plainSpecs[i].minV, plainSpecs[i].maxV, plainSpecs[i].step);
+            row.slider.setValue ((double) plainSpecs[i].param->load(), juce::dontSendNotification);
+            auto* param = plainSpecs[i].param;
             auto* slider = &row.slider;
             row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
         }
 
-        // Drive/Cutoff get overridden below to be override-aware instead
-        // of always writing straight to the base atomic - see
-        // bassDriveOverrideButton/bassCutoffOverrideButton.
-        addAndMakeVisible (bassDriveOverrideButton);
-        bassDriveOverrideButton.onClick = [this]
-        {
-            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-            bool newActive = ! gp.bassDriveOverride.active.load();
-            // seed with the current base value so turning an override on
-            // never silently jumps the sound - it starts as a no-op
-            if (newActive)
-                gp.bassDriveOverride.value.store (engine.bass.drive.load());
-            gp.bassDriveOverride.active.store (newActive);
-            refreshBassOverrideControls();
-        };
-        bassParamRows[1].slider.onValueChange = [this]
-        {
-            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-            float v = (float) bassParamRows[1].slider.getValue();
-            if (gp.bassDriveOverride.active.load())
-                gp.bassDriveOverride.value.store (v);
-            else
-                engine.bass.drive.store (v);
-        };
-
-        addAndMakeVisible (bassCutoffOverrideButton);
-        bassCutoffOverrideButton.onClick = [this]
-        {
-            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-            bool newActive = ! gp.bassCutoffOverride.active.load();
-            if (newActive)
-                gp.bassCutoffOverride.value.store (engine.bass.cutoffHz.load());
-            gp.bassCutoffOverride.active.store (newActive);
-            refreshBassOverrideControls();
-        };
-        bassParamRows[2].slider.onValueChange = [this]
-        {
-            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-            float v = (float) bassParamRows[2].slider.getValue();
-            if (gp.bassCutoffOverride.active.load())
-                gp.bassCutoffOverride.value.store (v);
-            else
-                engine.bass.cutoffHz.store (v);
-        };
+        pageContent.addAndMakeVisible (bassPitchTransientLabel);
+        pageContent.addAndMakeVisible (bassFilterTransientLabel);
+        pageContent.addAndMakeVisible (bassDriveTransientLabel);
+        bassPitchTransientLabel.setFont (juce::Font (14.0f, juce::Font::bold));
+        bassFilterTransientLabel.setFont (juce::Font (14.0f, juce::Font::bold));
+        bassDriveTransientLabel.setFont (juce::Font (14.0f, juce::Font::bold));
     }
 
     // --- Skank (sequenced, see SkankSynth.h) ---
-    addAndMakeVisible (skankTitleLabel);
+    pageContent.addAndMakeVisible (skankTitleLabel);
     skankTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
-    addAndMakeVisible (skankTriggerButton);
+    pageContent.addAndMakeVisible (skankTriggerButton);
     skankTriggerButton.onClick = [this] { engine.requestManualSkankTrigger(); };
 
-    addAndMakeVisible (skankClearButton);
+    pageContent.addAndMakeVisible (skankClearButton);
     skankClearButton.onClick = [this]
     {
         engine.skankPattern().clearAll();
         engine.skankSawMixCurve().resetToValue (0.5f);
+        refreshSkankPitchViewport (true); // nothing left to show - back to the default center
         refreshStepColours();
         skankSawMixLaneEditor.repaint();
     };
@@ -531,15 +617,67 @@ MainComponent::MainComponent()
     {
         auto& btn = skankStepButtons[(size_t) s];
         btn.setHasPitch (true); // transposes the whole chord's root - see SkankSynth::triggerChord
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onToggle = [this, s]
         {
-            engine.skankPattern().toggle (skankViewPage * RawDub::numSteps + s);
+            int stepIndex = skankViewPage * RawDub::numSteps + s;
+            engine.skankPattern().toggle (stepIndex);
+            if (engine.skankPattern().isOn (stepIndex))
+            {
+                // newly activated steps are seeded with the current global
+                // chord-quality default (see skankChordQualityButtons/
+                // skankMajorButton) and default to wherever you're
+                // currently looking pitch-wise, not always the root
+                engine.skankPatternSlot().setChordIsMinor (stepIndex, engine.skank.minorChord.load());
+                engine.skankPattern().setSemitoneOffset (stepIndex, skankPitchViewportMin + pitchViewportSize / 2);
+            }
             refreshStepColours();
         };
-        btn.onPitchDrag = [this, s] (int offset)
+        btn.onPitchDrag = [this, s] (int offset, int edgeDirection)
         {
-            engine.skankPattern().setSemitoneOffset (skankViewPage * RawDub::numSteps + s, offset);
+            int stepIndex = skankViewPage * RawDub::numSteps + s;
+            skankDraggingStepIndex = stepIndex;
+
+            if (edgeDirection != 0)
+            {
+                skankPitchEdgeScrollDirection = edgeDirection;
+                skankPitchEdgeScrollStepIndex = stepIndex;
+                return;
+            }
+            skankPitchEdgeScrollDirection = 0;
+
+            engine.skankPattern().setSemitoneOffset (stepIndex, offset);
+            refreshSkankGuideLines();
+
+            if (offset < skankPitchViewportMin)
+                skankPitchViewportMin = offset;
+            else if (offset > skankPitchViewportMin + pitchViewportSize)
+                skankPitchViewportMin = offset - pitchViewportSize;
+            else
+                return;
+            refreshSkankPitchViewport (false);
+        };
+        btn.onPitchDragEnd = [this]
+        {
+            skankDraggingStepIndex = -1;
+            refreshSkankGuideLines();
+        };
+        btn.onHoverChanged = [this, s] (bool entering)
+        {
+            skankHoveredStepIndex = entering ? (skankViewPage * RawDub::numSteps + s) : -1;
+            refreshSkankGuideLines();
+        };
+        btn.onPitchWheel = [this] (float wheelDeltaY)
+        {
+            skankPitchWheelAccumulator += wheelDeltaY * 24.0f;
+            int semitoneShift = (int) skankPitchWheelAccumulator;
+            if (semitoneShift == 0)
+                return;
+            skankPitchWheelAccumulator -= (float) semitoneShift;
+            skankPitchViewportMin = juce::jlimit (-RawDub::StepPattern::maxSemitoneOffset,
+                                                   RawDub::StepPattern::maxSemitoneOffset - pitchViewportSize,
+                                                   skankPitchViewportMin + semitoneShift);
+            refreshSkankPitchViewport (false);
         };
         btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
         {
@@ -547,12 +685,26 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (skankLengthLabel);
+    // per-step chord quality lane - click cycles Major/Minor for that step
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        auto& btn = skankChordQualityButtons[(size_t) s];
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, s]
+        {
+            int stepIndex = skankViewPage * RawDub::numSteps + s;
+            bool minor = engine.skankPatternSlot().getChordIsMinor (stepIndex);
+            engine.skankPatternSlot().setChordIsMinor (stepIndex, ! minor);
+            refreshStepColours();
+        };
+    }
+
+    pageContent.addAndMakeVisible (skankLengthLabel);
     for (int i = 0; i < 4; ++i)
     {
         auto& btn = skankLengthButtons[(size_t) i];
         btn.setButtonText (juce::String (lengthOptions[i]));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, i]
         {
             setVoiceLength (engine.skankPattern(), lengthOptions[i], skankViewPage);
@@ -564,7 +716,7 @@ MainComponent::MainComponent()
     {
         auto& btn = skankPageButtons[(size_t) p];
         btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, p]
         {
             skankViewPage = p;
@@ -572,16 +724,20 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (skankPatternBankLabel);
+    pageContent.addAndMakeVisible (skankPitchRangeLabel);
+    skankPitchRangeLabel.setJustificationType (juce::Justification::centredRight);
+
+    pageContent.addAndMakeVisible (skankPatternBankLabel);
     for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
     {
         auto& btn = skankPatternBankButtons[(size_t) i];
         btn.setButtonText (juce::String (i + 1));
-        addAndMakeVisible (btn);
+        pageContent.addAndMakeVisible (btn);
         btn.onClick = [this, i]
         {
             engine.setCurrentSkankPatternIndex (i);
             skankViewPage = 0;
+            refreshSkankPitchViewport (true);
             refreshStepColours();
             refreshPatternSharingIndicators();
             skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
@@ -590,19 +746,20 @@ MainComponent::MainComponent()
         };
     }
 
-    addAndMakeVisible (skankSharedLabel);
-    addAndMakeVisible (skankMakeUniqueButton);
+    pageContent.addAndMakeVisible (skankSharedLabel);
+    pageContent.addAndMakeVisible (skankMakeUniqueButton);
     skankMakeUniqueButton.onClick = [this]
     {
         engine.makeSkankPatternUnique();
+        refreshSkankPitchViewport (true);
         refreshPatternSharingIndicators();
         skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
         skankSawMixLaneEditor.repaint();
         refreshGlobalPatternButtons();
     };
 
-    addAndMakeVisible (skankMajorButton);
-    addAndMakeVisible (skankMinorButton);
+    pageContent.addAndMakeVisible (skankMajorButton);
+    pageContent.addAndMakeVisible (skankMinorButton);
     skankMajorButton.setClickingTogglesState (true);
     skankMinorButton.setClickingTogglesState (true);
     skankMajorButton.setRadioGroupId (6001);
@@ -612,69 +769,67 @@ MainComponent::MainComponent()
     skankMinorButton.onClick = [this] { engine.skank.minorChord.store (true); };
 
     {
-        ParamSpec specs[5] = {
-            { "Tune",    &engine.skank.tuneHz,  200.0, 800.0, 1.0  },
-            { "SawMix",  &engine.skank.sawMix,  0.0,   1.0,   0.01 },
-            { "Decay",   &engine.skank.decayMs, 30.0,  500.0, 1.0  },
-            { "Drive",   &engine.skank.drive,   0.0,   1.0,   0.01 },
-            { "Volume",  &engine.skank.volume,  0.0,   1.0,   0.01 },
-        };
+        using RawDub::SkankParamID;
+        auto skankPattern = [this]() -> RawDub::StepPattern& { return engine.skankPattern(); };
+        auto skankOverrides = [this]() -> RawDub::AudioEngine::OverrideMap& { return engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()].skankOverrides; };
 
-        for (int i = 0; i < 5; ++i)
+        // currentInstrumentTab 2 = Skank, see switchInstrumentTab.
+        setupCurveableParam (skankCurveRows[0], "Tune",  engine.skank.tuneHz,  200.0, 800.0, 1.0,  (int) SkankParamID::Tune,  2, skankPattern, skankOverrides);
+
+        // SawMix: NOT a CurveableParamRow - it's already always-a-curve
+        // via its own separate mechanism (skankSawMixLaneEditor below),
+        // never a flat value with an optional curve. The slider is "set
+        // a constant," the curve is "compose evolution" - never two
+        // independent ways of controlling the same thing. Moving the
+        // slider collapses the curve back to a flat line at the
+        // slider's value.
+        pageContent.addAndMakeVisible (skankSawMixRow.label);
+        skankSawMixRow.label.setText ("SawMix", juce::dontSendNotification);
+        pageContent.addAndMakeVisible (skankSawMixRow.slider);
+        skankSawMixRow.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+        skankSawMixRow.slider.setScrollWheelEnabled (false);
+        skankSawMixRow.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+        skankSawMixRow.slider.setRange (0.0, 1.0, 0.01);
+        skankSawMixRow.slider.setValue ((double) engine.skank.sawMix.load(), juce::dontSendNotification);
+        skankSawMixRow.slider.onValueChange = [this]
         {
-            auto& row = skankParamRows[(size_t) i];
-
-            addAndMakeVisible (row.label);
-            row.label.setText (specs[i].name, juce::dontSendNotification);
-
-            addAndMakeVisible (row.slider);
-            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
-            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
-            row.slider.setRange (specs[i].minV, specs[i].maxV, specs[i].step);
-            row.slider.setValue ((double) specs[i].param->load(), juce::dontSendNotification);
-
-            auto* param = specs[i].param;
-            auto* slider = &row.slider;
-            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
-        }
-
-        // SawMix specifically: the slider is "set a constant," the curve
-        // is "compose evolution" - never two independent ways of
-        // controlling the same thing. Moving the slider collapses the
-        // curve back to a flat line at the slider's value; see
-        // SkankSynth::resetSawMixLaneToValue.
-        skankParamRows[1].slider.onValueChange = [this]
-        {
-            float v = (float) skankParamRows[1].slider.getValue();
+            float v = (float) skankSawMixRow.slider.getValue();
             engine.skank.sawMix.store (v);
             engine.skankSawMixCurve().resetToValue (v);
             skankSawMixLaneEditor.repaint();
         };
 
-        // Decay gets the same section-level override as Bass Drive/Cutoff
-        addAndMakeVisible (skankDecayOverrideButton);
-        skankDecayOverrideButton.onClick = [this]
-        {
-            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-            bool newActive = ! gp.skankDecayOverride.active.load();
-            if (newActive)
-                gp.skankDecayOverride.value.store (engine.skank.decayMs.load());
-            gp.skankDecayOverride.active.store (newActive);
-            refreshSkankOverrideControls();
+        setupCurveableParam (skankCurveRows[1], "Decay", engine.skank.decayMs, 30.0, 500.0, 1.0,  (int) SkankParamID::Decay, 2, skankPattern, skankOverrides);
+        setupCurveableParam (skankCurveRows[2], "Drive", engine.skank.drive,   0.0,  1.0,   0.01, (int) SkankParamID::Drive, 2, skankPattern, skankOverrides);
+        setupCurveableParam (skankCurveRows[3], "Delay Send", engine.skank.delaySend, 0.0, 1.0, 0.01, (int) SkankParamID::DelaySend, 2, skankPattern, skankOverrides);
+
+        // Volume - continuously-read mixing control, plain row, see
+        // skankPlainRows' comment in MainComponent.h.
+        ParamSpec plainSpecs[1] = {
+            { "Volume", &engine.skank.volume, 0.0, 1.0, 0.01 },
         };
-        skankParamRows[2].slider.onValueChange = [this]
+        for (int i = 0; i < 1; ++i)
         {
-            auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-            float v = (float) skankParamRows[2].slider.getValue();
-            if (gp.skankDecayOverride.active.load())
-                gp.skankDecayOverride.value.store (v);
-            else
-                engine.skank.decayMs.store (v);
-        };
+            auto& row = skankPlainRows[(size_t) i];
+
+            pageContent.addAndMakeVisible (row.label);
+            row.label.setText (plainSpecs[i].name, juce::dontSendNotification);
+
+            pageContent.addAndMakeVisible (row.slider);
+            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setScrollWheelEnabled (false);
+            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+            row.slider.setRange (plainSpecs[i].minV, plainSpecs[i].maxV, plainSpecs[i].step);
+            row.slider.setValue ((double) plainSpecs[i].param->load(), juce::dontSendNotification);
+
+            auto* param = plainSpecs[i].param;
+            auto* slider = &row.slider;
+            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
+        }
     }
 
-    addAndMakeVisible (skankSawMixLaneLabel);
-    addAndMakeVisible (skankSawMixLaneEditor);
+    pageContent.addAndMakeVisible (skankSawMixLaneLabel);
+    pageContent.addAndMakeVisible (skankSawMixLaneEditor);
     skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
     skankSawMixLaneEditor.getPointCount = [this] { return engine.skankSawMixCurve().getPointCount(); };
     skankSawMixLaneEditor.getPointPosition = [this] (int i) { return engine.skankSawMixCurve().getPointPosition (i); };
@@ -684,20 +839,302 @@ MainComponent::MainComponent()
     skankSawMixLaneEditor.onAddPoint = [this] (float p, float v) { return engine.skankSawMixCurve().insertPoint (p, v); };
     skankSawMixLaneEditor.onRemovePoint = [this] (int i) { engine.skankSawMixCurve().removePoint (i); };
 
+    // --- Snare ---
+    pageContent.addAndMakeVisible (snareTriggerButton);
+    snareTriggerButton.onClick = [this] { engine.requestManualSnareTrigger(); };
+
+    pageContent.addAndMakeVisible (snareClearButton);
+    snareClearButton.onClick = [this]
+    {
+        engine.snarePattern().clearAll();
+        refreshStepColours();
+    };
+
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        auto& btn = snareStepButtons[(size_t) s];
+        pageContent.addAndMakeVisible (btn);
+        btn.onToggle = [this, s]
+        {
+            engine.snarePattern().toggle (snareViewPage * RawDub::numSteps + s);
+            refreshStepColours();
+        };
+        btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
+        {
+            engine.snarePattern().setLevel (snareViewPage * RawDub::numSteps + s, lvl);
+        };
+    }
+
+    pageContent.addAndMakeVisible (snareLengthLabel);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& btn = snareLengthButtons[(size_t) i];
+        btn.setButtonText (juce::String (lengthOptions[i]));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, i] { setVoiceLength (engine.snarePattern(), lengthOptions[i], snareViewPage); };
+    }
+
+    for (int p = 0; p < maxPages; ++p)
+    {
+        auto& btn = snarePageButtons[(size_t) p];
+        btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, p]
+        {
+            snareViewPage = p;
+            refreshStepColours();
+        };
+    }
+
+    pageContent.addAndMakeVisible (snarePatternBankLabel);
+    for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
+    {
+        auto& btn = snarePatternBankButtons[(size_t) i];
+        btn.setButtonText (juce::String (i + 1));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, i]
+        {
+            engine.setCurrentSnarePatternIndex (i);
+            snareViewPage = 0;
+            refreshStepColours();
+            refreshPatternSharingIndicators();
+            resized();
+        };
+    }
+
+    pageContent.addAndMakeVisible (snareSharedLabel);
+    pageContent.addAndMakeVisible (snareMakeUniqueButton);
+    snareMakeUniqueButton.onClick = [this]
+    {
+        engine.makeSnarePatternUnique();
+        refreshPatternSharingIndicators();
+        refreshGlobalPatternButtons();
+    };
+
+    pageContent.addAndMakeVisible (snareTitleLabel);
+    snareTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
+
+    {
+        using RawDub::SnareParamID;
+        auto snarePattern = [this]() -> RawDub::StepPattern& { return engine.snarePattern(); };
+        auto snareOverrides = [this]() -> RawDub::AudioEngine::OverrideMap& { return engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()].snareOverrides; };
+
+        // currentInstrumentTab 3 = Snare, see switchInstrumentTab.
+        setupCurveableParam (snareCurveRows[0], "Tune",      engine.snare.tuneHz,    50.0,  500.0,  1.0,  (int) SnareParamID::Tune,      3, snarePattern, snareOverrides);
+        setupCurveableParam (snareCurveRows[1], "Noise Mix", engine.snare.noiseMix,  0.0,   1.0,    0.01, (int) SnareParamID::NoiseMix,  3, snarePattern, snareOverrides);
+        setupCurveableParam (snareCurveRows[2], "Cutoff",    engine.snare.cutoffHz,  200.0, 8000.0, 10.0, (int) SnareParamID::Cutoff,    3, snarePattern, snareOverrides);
+        setupCurveableParam (snareCurveRows[3], "Resonance", engine.snare.resonance, 0.0,   0.95,   0.01, (int) SnareParamID::Resonance, 3, snarePattern, snareOverrides);
+        setupCurveableParam (snareCurveRows[4], "Decay",     engine.snare.decayMs,   30.0,  500.0,  1.0,  (int) SnareParamID::Decay,     3, snarePattern, snareOverrides);
+        setupCurveableParam (snareCurveRows[5], "Drive",     engine.snare.drive,     0.0,   1.0,    0.01, (int) SnareParamID::Drive,     3, snarePattern, snareOverrides);
+        setupCurveableParam (snareCurveRows[6], "Delay Send", engine.snare.delaySend, 0.0,  1.0,    0.01, (int) SnareParamID::DelaySend, 3, snarePattern, snareOverrides);
+
+        // Volume - continuously-read mixing control, plain row, see
+        // snarePlainRows' comment in MainComponent.h.
+        ParamSpec plainSpecs[1] = {
+            { "Volume", &engine.snare.volume, 0.0, 1.0, 0.01 },
+        };
+        for (int i = 0; i < 1; ++i)
+        {
+            auto& row = snarePlainRows[(size_t) i];
+
+            pageContent.addAndMakeVisible (row.label);
+            row.label.setText (plainSpecs[i].name, juce::dontSendNotification);
+
+            pageContent.addAndMakeVisible (row.slider);
+            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setScrollWheelEnabled (false);
+            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+            row.slider.setRange (plainSpecs[i].minV, plainSpecs[i].maxV, plainSpecs[i].step);
+            row.slider.setValue ((double) plainSpecs[i].param->load(), juce::dontSendNotification);
+
+            auto* param = plainSpecs[i].param;
+            auto* slider = &row.slider;
+            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
+        }
+    }
+
+    // --- Hi-Hat (closed) ---
+    pageContent.addAndMakeVisible (hihatTriggerButton);
+    hihatTriggerButton.onClick = [this] { engine.requestManualHiHatTrigger(); };
+
+    pageContent.addAndMakeVisible (hihatClearButton);
+    hihatClearButton.onClick = [this]
+    {
+        engine.hihatPattern().clearAll();
+        refreshStepColours();
+    };
+
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        auto& btn = hihatStepButtons[(size_t) s];
+        pageContent.addAndMakeVisible (btn);
+        btn.onToggle = [this, s]
+        {
+            engine.hihatPattern().toggle (hihatViewPage * RawDub::numSteps + s);
+            refreshStepColours();
+        };
+        btn.onLevelDrag = [this, s] (RawDub::StepLevel lvl)
+        {
+            engine.hihatPattern().setLevel (hihatViewPage * RawDub::numSteps + s, lvl);
+        };
+    }
+
+    pageContent.addAndMakeVisible (hihatLengthLabel);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto& btn = hihatLengthButtons[(size_t) i];
+        btn.setButtonText (juce::String (lengthOptions[i]));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, i] { setVoiceLength (engine.hihatPattern(), lengthOptions[i], hihatViewPage); };
+    }
+
+    for (int p = 0; p < maxPages; ++p)
+    {
+        auto& btn = hihatPageButtons[(size_t) p];
+        btn.setButtonText (juce::String (p * RawDub::numSteps + 1) + "-" + juce::String ((p + 1) * RawDub::numSteps));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, p]
+        {
+            hihatViewPage = p;
+            refreshStepColours();
+        };
+    }
+
+    pageContent.addAndMakeVisible (hihatPatternBankLabel);
+    for (int i = 0; i < RawDub::AudioEngine::bankSize; ++i)
+    {
+        auto& btn = hihatPatternBankButtons[(size_t) i];
+        btn.setButtonText (juce::String (i + 1));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, i]
+        {
+            engine.setCurrentHiHatPatternIndex (i);
+            hihatViewPage = 0;
+            refreshStepColours();
+            refreshPatternSharingIndicators();
+            resized();
+        };
+    }
+
+    pageContent.addAndMakeVisible (hihatSharedLabel);
+    pageContent.addAndMakeVisible (hihatMakeUniqueButton);
+    hihatMakeUniqueButton.onClick = [this]
+    {
+        engine.makeHiHatPatternUnique();
+        refreshPatternSharingIndicators();
+        refreshGlobalPatternButtons();
+    };
+
+    pageContent.addAndMakeVisible (hihatTitleLabel);
+    hihatTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
+
+    {
+        using RawDub::HiHatParamID;
+        auto hihatPattern = [this]() -> RawDub::StepPattern& { return engine.hihatPattern(); };
+        auto hihatOverrides = [this]() -> RawDub::AudioEngine::OverrideMap& { return engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()].hihatOverrides; };
+
+        // currentInstrumentTab 4 = Hi-Hat, see switchInstrumentTab.
+        setupCurveableParam (hihatCurveRows[0], "Cutoff",    engine.hihat.cutoffHz,  2000.0, 14000.0, 10.0, (int) HiHatParamID::Cutoff,    4, hihatPattern, hihatOverrides);
+        setupCurveableParam (hihatCurveRows[1], "Resonance", engine.hihat.resonance, 0.0,    0.95,    0.01, (int) HiHatParamID::Resonance, 4, hihatPattern, hihatOverrides);
+        setupCurveableParam (hihatCurveRows[2], "Decay",     engine.hihat.decayMs,   20.0,   400.0,   1.0,  (int) HiHatParamID::Decay,     4, hihatPattern, hihatOverrides);
+        setupCurveableParam (hihatCurveRows[3], "Drive",     engine.hihat.drive,     0.0,    1.0,     0.01, (int) HiHatParamID::Drive,     4, hihatPattern, hihatOverrides);
+        setupCurveableParam (hihatCurveRows[4], "Delay Send", engine.hihat.delaySend, 0.0,   1.0,     0.01, (int) HiHatParamID::DelaySend, 4, hihatPattern, hihatOverrides);
+
+        // Volume - continuously-read mixing control, plain row, see
+        // hihatPlainRows' comment in MainComponent.h.
+        ParamSpec plainSpecs[1] = {
+            { "Volume", &engine.hihat.volume, 0.0, 1.0, 0.01 },
+        };
+        for (int i = 0; i < 1; ++i)
+        {
+            auto& row = hihatPlainRows[(size_t) i];
+
+            pageContent.addAndMakeVisible (row.label);
+            row.label.setText (plainSpecs[i].name, juce::dontSendNotification);
+
+            pageContent.addAndMakeVisible (row.slider);
+            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setScrollWheelEnabled (false);
+            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+            row.slider.setRange (plainSpecs[i].minV, plainSpecs[i].maxV, plainSpecs[i].step);
+            row.slider.setValue ((double) plainSpecs[i].param->load(), juce::dontSendNotification);
+
+            auto* param = plainSpecs[i].param;
+            auto* slider = &row.slider;
+            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
+        }
+    }
+
+    // --- Delay (send effect on the whole mix, not sequenced - see DubDelay.h) ---
+    pageContent.addAndMakeVisible (delayTitleLabel);
+    delayTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
+
+    {
+        ParamSpec delaySpecs[5] = {
+            { "Time",     &engine.delay.timeMs,   10.0,  1500.0, 5.0  },
+            { "Feedback", &engine.delay.feedback, 0.0,   (double) RawDub::DubDelay::maxFeedback, 0.01 },
+            { "Tone",     &engine.delay.toneHz,   200.0, 8000.0, 10.0 },
+            { "Drive",    &engine.delay.drive,    0.0,   1.0,    0.01 },
+            { "Wet",      &engine.delay.wet,      0.0,   1.0,    0.01 },
+        };
+        for (int i = 0; i < 5; ++i)
+        {
+            auto& row = delayParamRows[(size_t) i];
+            pageContent.addAndMakeVisible (row.label);
+            row.label.setText (delaySpecs[i].name, juce::dontSendNotification);
+            pageContent.addAndMakeVisible (row.slider);
+            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            row.slider.setScrollWheelEnabled (false); // page now scrolls under the mouse - a slider must never eat that wheel event
+            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+            row.slider.setRange (delaySpecs[i].minV, delaySpecs[i].maxV, delaySpecs[i].step);
+            row.slider.setValue ((double) delaySpecs[i].param->load(), juce::dontSendNotification);
+            auto* param = delaySpecs[i].param;
+            auto* slider = &row.slider;
+            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
+        }
+    }
+
+    // A/B comparison toggle, same black/white language as the rest of
+    // the app - not a permanent "feature," just makes evaluating the
+    // loop's contribution to the mix practical during voicing.
+    pageContent.addAndMakeVisible (delayBypassButton);
+    delayBypassButton.onClick = [this]
+    {
+        bool newBypass = ! engine.delay.bypass.load();
+        engine.delay.bypass.store (newBypass);
+        delayBypassButton.setColour (juce::TextButton::buttonColourId, newBypass ? juce::Colours::black : juce::Colours::white);
+        delayBypassButton.setColour (juce::TextButton::textColourOffId, newBypass ? juce::Colours::white : juce::Colours::black);
+    };
+
     // --- component groups for the instrument tabs (see switchInstrumentTab) ---
     kickComponents = { &kickTriggerButton, &kickClearButton, &kickTitleLabel, &kickLengthLabel, &kickPatternBankLabel,
                         &kickSharedLabel, &kickMakeUniqueButton };
     for (auto& btn : kickStepButtons) kickComponents.push_back (&btn);
-    for (auto& row : kickParamRows) { kickComponents.push_back (&row.label); kickComponents.push_back (&row.slider); }
+    for (auto& row : kickCurveRows)
+    {
+        kickComponents.push_back (&row.label);
+        kickComponents.push_back (&row.slider);
+        kickComponents.push_back (&row.curveEditor);
+    }
+    for (auto& row : kickPlainRows) { kickComponents.push_back (&row.label); kickComponents.push_back (&row.slider); }
     for (auto& btn : kickLengthButtons) kickComponents.push_back (&btn);
     for (auto& btn : kickPageButtons) kickComponents.push_back (&btn);
     for (auto& btn : kickPatternBankButtons) kickComponents.push_back (&btn);
 
     bassComponents = { &bassTriggerButton, &bassClearButton, &bassTitleLabel, &bassLengthLabel, &bassPatternBankLabel,
-                        &bassHarmonicModeButton, &bassAmRatioLabel, &bassDriveOverrideButton, &bassCutoffOverrideButton,
-                        &bassSharedLabel, &bassMakeUniqueButton };
+                        &bassHarmonicModeButton, &bassAmRatioLabel,
+                        &bassSharedLabel, &bassMakeUniqueButton, &bassPitchRangeLabel };
     for (auto& btn : bassStepButtons) bassComponents.push_back (&btn);
-    for (auto& row : bassParamRows) { bassComponents.push_back (&row.label); bassComponents.push_back (&row.slider); }
+    for (auto& row : bassCurveRows)
+    {
+        bassComponents.push_back (&row.label);
+        bassComponents.push_back (&row.slider);
+        bassComponents.push_back (&row.curveEditor);
+    }
+    for (auto& row : bassPlainRows) { bassComponents.push_back (&row.label); bassComponents.push_back (&row.slider); }
+    bassComponents.push_back (&bassPitchTransientLabel);
+    bassComponents.push_back (&bassFilterTransientLabel);
+    bassComponents.push_back (&bassDriveTransientLabel);
     for (auto& btn : bassLengthButtons) bassComponents.push_back (&btn);
     for (auto& btn : bassPageButtons) bassComponents.push_back (&btn);
     for (auto& btn : bassPatternBankButtons) bassComponents.push_back (&btn);
@@ -705,20 +1142,65 @@ MainComponent::MainComponent()
 
     skankComponents = { &skankTriggerButton, &skankClearButton, &skankTitleLabel, &skankMajorButton, &skankMinorButton,
                          &skankLengthLabel, &skankPatternBankLabel, &skankSawMixLaneLabel, &skankSawMixLaneEditor,
-                         &skankDecayOverrideButton, &skankSharedLabel, &skankMakeUniqueButton };
+                         &skankSawMixRow.label, &skankSawMixRow.slider,
+                         &skankSharedLabel, &skankMakeUniqueButton, &skankPitchRangeLabel };
     for (auto& btn : skankStepButtons) skankComponents.push_back (&btn);
-    for (auto& row : skankParamRows) { skankComponents.push_back (&row.label); skankComponents.push_back (&row.slider); }
+    for (auto& btn : skankChordQualityButtons) skankComponents.push_back (&btn);
+    for (auto& row : skankCurveRows)
+    {
+        skankComponents.push_back (&row.label);
+        skankComponents.push_back (&row.slider);
+        skankComponents.push_back (&row.curveEditor);
+    }
+    for (auto& row : skankPlainRows) { skankComponents.push_back (&row.label); skankComponents.push_back (&row.slider); }
     for (auto& btn : skankLengthButtons) skankComponents.push_back (&btn);
     for (auto& btn : skankPageButtons) skankComponents.push_back (&btn);
     for (auto& btn : skankPatternBankButtons) skankComponents.push_back (&btn);
 
+    snareComponents = { &snareTriggerButton, &snareClearButton, &snareTitleLabel, &snareLengthLabel, &snarePatternBankLabel,
+                         &snareSharedLabel, &snareMakeUniqueButton };
+    for (auto& btn : snareStepButtons) snareComponents.push_back (&btn);
+    for (auto& row : snareCurveRows)
+    {
+        snareComponents.push_back (&row.label);
+        snareComponents.push_back (&row.slider);
+        snareComponents.push_back (&row.curveEditor);
+    }
+    for (auto& row : snarePlainRows) { snareComponents.push_back (&row.label); snareComponents.push_back (&row.slider); }
+    for (auto& btn : snareLengthButtons) snareComponents.push_back (&btn);
+    for (auto& btn : snarePageButtons) snareComponents.push_back (&btn);
+    for (auto& btn : snarePatternBankButtons) snareComponents.push_back (&btn);
+
+    hihatComponents = { &hihatTriggerButton, &hihatClearButton, &hihatTitleLabel, &hihatLengthLabel, &hihatPatternBankLabel,
+                         &hihatSharedLabel, &hihatMakeUniqueButton };
+    for (auto& btn : hihatStepButtons) hihatComponents.push_back (&btn);
+    for (auto& row : hihatCurveRows)
+    {
+        hihatComponents.push_back (&row.label);
+        hihatComponents.push_back (&row.slider);
+        hihatComponents.push_back (&row.curveEditor);
+    }
+    for (auto& row : hihatPlainRows) { hihatComponents.push_back (&row.label); hihatComponents.push_back (&row.slider); }
+    for (auto& btn : hihatLengthButtons) hihatComponents.push_back (&btn);
+    for (auto& btn : hihatPageButtons) hihatComponents.push_back (&btn);
+    for (auto& btn : hihatPatternBankButtons) hihatComponents.push_back (&btn);
+
+    delayComponents = { &delayTitleLabel, &delayBypassButton };
+    for (auto& row : delayParamRows) { delayComponents.push_back (&row.label); delayComponents.push_back (&row.slider); }
+
     switchInstrumentTab (0);
 
+    refreshBassPitchViewport (false);
+    refreshSkankPitchViewport (false);
     refreshStepColours();
     updatePlayButtonText();
 
     setAudioChannels (0, 2);
-    setSize (820, 900);
+    // Raised from 900 - Bass's 3 independent Transient modules (12 param
+    // rows + 3 headings) need more vertical room than the original size
+    // comfortably gave; window is resizable (see Main.cpp) so this is
+    // only the first-launch default, not a hard limit.
+    setSize (820, 1000);
     startTimerHz (30);
 }
 
@@ -729,8 +1211,11 @@ void MainComponent::switchInstrumentTab (int tab)
     for (auto* c : kickComponents)  c->setVisible (tab == 0);
     for (auto* c : bassComponents)  c->setVisible (tab == 1);
     for (auto* c : skankComponents) c->setVisible (tab == 2);
+    for (auto* c : snareComponents) c->setVisible (tab == 3);
+    for (auto* c : hihatComponents) c->setVisible (tab == 4);
+    for (auto* c : delayComponents) c->setVisible (tab == 5);
 
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 6; ++i)
     {
         bool isActive = (i == tab);
         instrumentTabButtons[(size_t) i].setColour (juce::TextButton::buttonColourId, isActive ? juce::Colours::black : juce::Colours::white);
@@ -738,11 +1223,22 @@ void MainComponent::switchInstrumentTab (int tab)
     }
 
     resized();
+    // each tab starts scrolled to the top - a scroll position from
+    // whichever tab was showing before has no meaning on this one
+    pageViewport.setViewPosition (0, 0);
     refreshStepColours();
     // sharing indicators have their own conditional visibility (only
     // shown when actually shared) that the blanket show/hide above
     // doesn't know about - re-correct it now
     refreshPatternSharingIndicators();
+    // same problem for every instrument's curve rows: the blanket show
+    // above just force-showed every row's curveEditor regardless of
+    // whether that row's curve is actually active/expanded - re-correct
+    // it now, same pattern as sharing indicators. refreshCurveRow itself
+    // gates visibility on currentInstrumentTab == row.ownerTab, so this
+    // is safe to run over every row regardless of which tab is now active.
+    for (auto* row : allCurveableRows)
+        refreshCurveRow (*row);
 }
 
 MainComponent::~MainComponent()
@@ -793,6 +1289,23 @@ void MainComponent::layoutStepRow (juce::Rectangle<int> stepRow, std::array<RawD
     }
 }
 
+// Positions each step's chord-quality button in the same columns as
+// skankStepButtons above it (see layoutStepRow) - visibility/text itself
+// is refreshed separately in refreshStepColours since it needs to
+// change on every toggle, not just on layout.
+void MainComponent::layoutSkankChordQualityLane (juce::Rectangle<int> laneRow)
+{
+    int activeLength = engine.skankPattern().getActiveLength();
+    int stepsOnThisPage = juce::jlimit (0, RawDub::numSteps, activeLength - skankViewPage * RawDub::numSteps);
+    int stepWidth = stepsOnThisPage > 0 ? laneRow.getWidth() / stepsOnThisPage : 0;
+
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        if (s < stepsOnThisPage)
+            skankChordQualityButtons[(size_t) s].setBounds (laneRow.removeFromLeft (stepWidth).reduced (2, 0));
+    }
+}
+
 void MainComponent::resized()
 {
     auto area = getLocalBounds().reduced (16);
@@ -834,21 +1347,52 @@ void MainComponent::resized()
     instrumentTabButtons[1].setBounds (tabsRow.removeFromLeft (100));
     tabsRow.removeFromLeft (6);
     instrumentTabButtons[2].setBounds (tabsRow.removeFromLeft (100));
+    tabsRow.removeFromLeft (6);
+    instrumentTabButtons[3].setBounds (tabsRow.removeFromLeft (100));
+    tabsRow.removeFromLeft (6);
+    instrumentTabButtons[4].setBounds (tabsRow.removeFromLeft (100));
+    tabsRow.removeFromLeft (6);
+    instrumentTabButtons[5].setBounds (tabsRow.removeFromLeft (100));
 
     area.removeFromTop (16);
 
-    // Only the active instrument's section is shown - each starts from
-    // the same area rather than stacking, so switching tabs doesn't
-    // require scrolling to reach whichever one is now visible.
+    // Only the active instrument's section is shown - each lays out into
+    // pageContent starting from y=0, not stacking with the others. What
+    // used to be handed `area` directly now goes through pageViewport
+    // instead, so a tab whose content is taller than the window (Bass,
+    // with several curves/transient rows expanded) scrolls rather than
+    // clipping silently at the bottom - see pageContent's comment in
+    // MainComponent.h.
+    pageViewport.setBounds (area);
+    // Width is deliberately narrower than the viewport itself, by the
+    // scrollbar's own thickness plus a clear gap - a fixed gutter on the
+    // right for it, rather than letting it sit flush against (or
+    // overlap) the rightmost slider/value box. Without the extra gap the
+    // thumb reads as touching the value boxes rather than as a separate
+    // strip of its own.
+    constexpr int scrollbarGap = 20;
+    int contentWidth = juce::jmax (200, area.getWidth() - pageViewport.getScrollBarThickness() - scrollbarGap);
+    // Height is generous and gets trimmed to whatever the layout
+    // function actually used (its return value) right after - avoids
+    // needing a two-pass layout just to know the height up front.
+    juce::Rectangle<int> contentArea (0, 0, contentWidth, 4000);
+    int usedHeight = 0;
     if (currentInstrumentTab == 0)
-        layoutKickSection (area);
+        usedHeight = layoutKickSection (contentArea);
     else if (currentInstrumentTab == 1)
-        layoutBassSection (area);
+        usedHeight = layoutBassSection (contentArea);
+    else if (currentInstrumentTab == 2)
+        usedHeight = layoutSkankSection (contentArea);
+    else if (currentInstrumentTab == 3)
+        usedHeight = layoutSnareSection (contentArea);
+    else if (currentInstrumentTab == 4)
+        usedHeight = layoutHiHatSection (contentArea);
     else
-        layoutSkankSection (area);
+        usedHeight = layoutDelaySection (contentArea);
+    pageContent.setSize (contentWidth, usedHeight);
 }
 
-void MainComponent::layoutKickSection (juce::Rectangle<int> area)
+int MainComponent::layoutKickSection (juce::Rectangle<int> area)
 {
     auto kickHeader = area.removeFromTop (28);
     kickTitleLabel.setBounds (kickHeader.removeFromLeft (200));
@@ -894,18 +1438,37 @@ void MainComponent::layoutKickSection (juce::Rectangle<int> area)
 
     area.removeFromTop (10);
 
-    for (auto& row : kickParamRows)
+    auto layoutCurveRow = [&] (CurveableParamRow& row)
     {
         auto rowArea = area.removeFromTop (36);
-        row.label.setBounds (rowArea.removeFromLeft (70));
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+
+        if (activeCurveExists (row) && row.curveExpanded)
+        {
+            row.curveEditor.setBounds (area.removeFromTop (70));
+            area.removeFromTop (6);
+        }
+    };
+    for (auto& row : kickCurveRows)
+        layoutCurveRow (row);
+
+    for (auto& row : kickPlainRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
+
+    return area.getY();
 }
 
-void MainComponent::layoutBassSection (juce::Rectangle<int> area)
+int MainComponent::layoutBassSection (juce::Rectangle<int> area)
 {
     auto bassHeader = area.removeFromTop (28);
+    bassPitchRangeLabel.setBounds (bassHeader.removeFromRight (100));
     bassTitleLabel.setBounds (bassHeader.removeFromLeft (200));
     bassTriggerButton.setBounds (bassHeader.removeFromLeft (90));
     bassHeader.removeFromLeft (6);
@@ -965,27 +1528,71 @@ void MainComponent::layoutBassSection (juce::Rectangle<int> area)
 
     area.removeFromTop (10);
 
-    for (int i = 0; i < (int) bassParamRows.size(); ++i)
+    // Each row, by default: label + slider, nothing else - identical
+    // footprint to a plain ParamRow (see CurveableParamRow's comment in
+    // MainComponent.h, "calm by default"). No separate indicator
+    // component to position - the title text and value-box colour ARE
+    // the indicator (see refreshCurveRow). The curve editor only
+    // reserves space while row.curveExpanded is true for a row that
+    // actually has a curve - most rows, most of the time, take zero
+    // extra height. Interleaved with bassPlainRows (Volume/Delay Send) and
+    // the three Transient module headings, same visual order as before
+    // this became curveable.
+    auto layoutCurveRow = [&] (CurveableParamRow& row)
     {
-        auto& row = bassParamRows[(size_t) i];
         auto rowArea = area.removeFromTop (36);
-        row.label.setBounds (rowArea.removeFromLeft (70));
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
 
-        // Drive (1) and Cutoff (2) reserve room on the right for their
-        // section-level override toggle - see bassDriveOverrideButton
-        if (i == 1)
-            bassDriveOverrideButton.setBounds (rowArea.removeFromRight (80));
-        else if (i == 2)
-            bassCutoffOverrideButton.setBounds (rowArea.removeFromRight (80));
+        bool showEditor = activeCurveExists (row) && row.curveExpanded;
+        if (showEditor)
+        {
+            row.curveEditor.setBounds (area.removeFromTop (70));
+            area.removeFromTop (6);
+        }
+    };
 
+    layoutCurveRow (bassCurveRows[0]);
+    layoutCurveRow (bassCurveRows[1]);
+    layoutCurveRow (bassCurveRows[2]);
+    layoutCurveRow (bassCurveRows[3]);
+    layoutCurveRow (bassCurveRows[4]);
+    layoutCurveRow (bassCurveRows[5]); // AM Depth
+
+    for (auto& row : bassPlainRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
+
+    bassPitchTransientLabel.setBounds (area.removeFromTop (22));
+    area.removeFromTop (4);
+    layoutCurveRow (bassCurveRows[6]);
+    layoutCurveRow (bassCurveRows[7]);
+
+    area.removeFromTop (6);
+    bassFilterTransientLabel.setBounds (area.removeFromTop (22));
+    area.removeFromTop (4);
+    layoutCurveRow (bassCurveRows[8]);
+    layoutCurveRow (bassCurveRows[9]);
+
+    area.removeFromTop (6);
+    bassDriveTransientLabel.setBounds (area.removeFromTop (22));
+    area.removeFromTop (4);
+    layoutCurveRow (bassCurveRows[10]);
+
+    layoutCurveRow (bassCurveRows[11]); // Delay Send
+
+    return area.getY();
 }
 
-void MainComponent::layoutSkankSection (juce::Rectangle<int> area)
+int MainComponent::layoutSkankSection (juce::Rectangle<int> area)
 {
     auto skankHeader = area.removeFromTop (28);
+    skankPitchRangeLabel.setBounds (skankHeader.removeFromRight (100));
     skankTitleLabel.setBounds (skankHeader.removeFromLeft (150));
     skankTriggerButton.setBounds (skankHeader.removeFromLeft (90));
     skankHeader.removeFromLeft (6);
@@ -1027,6 +1634,11 @@ void MainComponent::layoutSkankSection (juce::Rectangle<int> area)
     auto skankStepRow = area.removeFromTop (120);
     layoutStepRow (skankStepRow, skankStepButtons, engine.skankPattern().getActiveLength(), skankViewPage);
 
+    area.removeFromTop (4);
+
+    auto skankChordQualityRow = area.removeFromTop (22);
+    layoutSkankChordQualityLane (skankChordQualityRow);
+
     area.removeFromTop (10);
 
     auto skankChordRow = area.removeFromTop (28);
@@ -1036,16 +1648,37 @@ void MainComponent::layoutSkankSection (juce::Rectangle<int> area)
 
     area.removeFromTop (8);
 
-    for (int i = 0; i < (int) skankParamRows.size(); ++i)
+    auto layoutCurveRow = [&] (CurveableParamRow& row)
     {
-        auto& row = skankParamRows[(size_t) i];
         auto rowArea = area.removeFromTop (36);
-        row.label.setBounds (rowArea.removeFromLeft (70));
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
 
-        // Decay (2) reserves room for its section-level override toggle
-        if (i == 2)
-            skankDecayOverrideButton.setBounds (rowArea.removeFromRight (80));
+        if (activeCurveExists (row) && row.curveExpanded)
+        {
+            row.curveEditor.setBounds (area.removeFromTop (70));
+            area.removeFromTop (6);
+        }
+    };
 
+    layoutCurveRow (skankCurveRows[0]); // Tune
+
+    {
+        auto rowArea = area.removeFromTop (36);
+        skankSawMixRow.label.setBounds (rowArea.removeFromLeft (90));
+        skankSawMixRow.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+    }
+
+    layoutCurveRow (skankCurveRows[1]); // Decay
+    layoutCurveRow (skankCurveRows[2]); // Drive
+    layoutCurveRow (skankCurveRows[3]); // Delay Send
+
+    for (auto& row : skankPlainRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
@@ -1054,6 +1687,173 @@ void MainComponent::layoutSkankSection (juce::Rectangle<int> area)
     skankSawMixLaneLabel.setBounds (area.removeFromTop (20));
     area.removeFromTop (4);
     skankSawMixLaneEditor.setBounds (area.removeFromTop (70));
+
+    return area.getY();
+}
+
+int MainComponent::layoutSnareSection (juce::Rectangle<int> area)
+{
+    auto snareHeader = area.removeFromTop (28);
+    snareTitleLabel.setBounds (snareHeader.removeFromLeft (200));
+    snareTriggerButton.setBounds (snareHeader.removeFromLeft (90));
+    snareHeader.removeFromLeft (6);
+    snareClearButton.setBounds (snareHeader.removeFromLeft (70));
+
+    area.removeFromTop (8);
+
+    auto snareLengthRow = area.removeFromTop (28);
+    snareLengthLabel.setBounds (snareLengthRow.removeFromLeft (60));
+    for (auto& btn : snareLengthButtons)
+    {
+        btn.setBounds (snareLengthRow.removeFromLeft (44));
+        snareLengthRow.removeFromLeft (6);
+    }
+    snareLengthRow.removeFromLeft (20);
+    int snareNumPages = (engine.snarePattern().getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    for (int p = 0; p < maxPages; ++p)
+    {
+        snarePageButtons[(size_t) p].setVisible (p < snareNumPages && snareNumPages > 1);
+        snarePageButtons[(size_t) p].setBounds (snareLengthRow.removeFromLeft (64));
+        snareLengthRow.removeFromLeft (6);
+    }
+
+    area.removeFromTop (8);
+
+    auto snarePatternBankRow = area.removeFromTop (28);
+    snarePatternBankLabel.setBounds (snarePatternBankRow.removeFromLeft (50));
+    for (auto& btn : snarePatternBankButtons)
+    {
+        btn.setBounds (snarePatternBankRow.removeFromLeft (22));
+        snarePatternBankRow.removeFromLeft (2);
+    }
+    snarePatternBankRow.removeFromLeft (8);
+    snareSharedLabel.setBounds (snarePatternBankRow.removeFromLeft (130));
+    snareMakeUniqueButton.setBounds (snarePatternBankRow.removeFromLeft (90));
+
+    area.removeFromTop (8);
+
+    auto snareStepRow = area.removeFromTop (50);
+    layoutStepRow (snareStepRow, snareStepButtons, engine.snarePattern().getActiveLength(), snareViewPage);
+
+    area.removeFromTop (10);
+
+    auto layoutCurveRow = [&] (CurveableParamRow& row)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+
+        if (activeCurveExists (row) && row.curveExpanded)
+        {
+            row.curveEditor.setBounds (area.removeFromTop (70));
+            area.removeFromTop (6);
+        }
+    };
+    for (auto& row : snareCurveRows)
+        layoutCurveRow (row);
+
+    for (auto& row : snarePlainRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+    }
+
+    return area.getY();
+}
+
+int MainComponent::layoutHiHatSection (juce::Rectangle<int> area)
+{
+    auto hihatHeader = area.removeFromTop (28);
+    hihatTitleLabel.setBounds (hihatHeader.removeFromLeft (200));
+    hihatTriggerButton.setBounds (hihatHeader.removeFromLeft (90));
+    hihatHeader.removeFromLeft (6);
+    hihatClearButton.setBounds (hihatHeader.removeFromLeft (70));
+
+    area.removeFromTop (8);
+
+    auto hihatLengthRow = area.removeFromTop (28);
+    hihatLengthLabel.setBounds (hihatLengthRow.removeFromLeft (60));
+    for (auto& btn : hihatLengthButtons)
+    {
+        btn.setBounds (hihatLengthRow.removeFromLeft (44));
+        hihatLengthRow.removeFromLeft (6);
+    }
+    hihatLengthRow.removeFromLeft (20);
+    int hihatNumPages = (engine.hihatPattern().getActiveLength() + RawDub::numSteps - 1) / RawDub::numSteps;
+    for (int p = 0; p < maxPages; ++p)
+    {
+        hihatPageButtons[(size_t) p].setVisible (p < hihatNumPages && hihatNumPages > 1);
+        hihatPageButtons[(size_t) p].setBounds (hihatLengthRow.removeFromLeft (64));
+        hihatLengthRow.removeFromLeft (6);
+    }
+
+    area.removeFromTop (8);
+
+    auto hihatPatternBankRow = area.removeFromTop (28);
+    hihatPatternBankLabel.setBounds (hihatPatternBankRow.removeFromLeft (50));
+    for (auto& btn : hihatPatternBankButtons)
+    {
+        btn.setBounds (hihatPatternBankRow.removeFromLeft (22));
+        hihatPatternBankRow.removeFromLeft (2);
+    }
+    hihatPatternBankRow.removeFromLeft (8);
+    hihatSharedLabel.setBounds (hihatPatternBankRow.removeFromLeft (130));
+    hihatMakeUniqueButton.setBounds (hihatPatternBankRow.removeFromLeft (90));
+
+    area.removeFromTop (8);
+
+    auto hihatStepRow = area.removeFromTop (50);
+    layoutStepRow (hihatStepRow, hihatStepButtons, engine.hihatPattern().getActiveLength(), hihatViewPage);
+
+    area.removeFromTop (10);
+
+    auto layoutCurveRow = [&] (CurveableParamRow& row)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+
+        if (activeCurveExists (row) && row.curveExpanded)
+        {
+            row.curveEditor.setBounds (area.removeFromTop (70));
+            area.removeFromTop (6);
+        }
+    };
+    for (auto& row : hihatCurveRows)
+        layoutCurveRow (row);
+
+    for (auto& row : hihatPlainRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+    }
+
+    return area.getY();
+}
+
+int MainComponent::layoutDelaySection (juce::Rectangle<int> area)
+{
+    auto delayHeader = area.removeFromTop (28);
+    delayTitleLabel.setBounds (delayHeader.removeFromLeft (150));
+    delayBypassButton.setBounds (delayHeader.removeFromLeft (90));
+
+    area.removeFromTop (16);
+
+    for (auto& row : delayParamRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        row.label.setBounds (rowArea.removeFromLeft (90));
+        row.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+    }
+
+    return area.getY();
 }
 
 void MainComponent::timerCallback()
@@ -1063,12 +1863,32 @@ void MainComponent::timerCallback()
     int kickStep = engine.isPlaying() ? engine.getCurrentKickStep() : -1;
     int bassStep = engine.isPlaying() ? engine.getCurrentBassStep() : -1;
     int skankStep = engine.isPlaying() ? engine.getCurrentSkankStep() : -1;
+    int snareStep = engine.isPlaying() ? engine.getCurrentSnareStep() : -1;
+    int hihatStep = engine.isPlaying() ? engine.getCurrentHiHatStep() : -1;
 
-    if (kickStep != kickPlayheadStep || bassStep != bassPlayheadStep || skankStep != skankPlayheadStep)
+    if (kickStep != kickPlayheadStep || bassStep != bassPlayheadStep || skankStep != skankPlayheadStep
+        || snareStep != snarePlayheadStep || hihatStep != hihatPlayheadStep)
     {
         kickPlayheadStep = kickStep;
         bassPlayheadStep = bassStep;
         skankPlayheadStep = skankStep;
+        snarePlayheadStep = snareStep;
+        hihatPlayheadStep = hihatStep;
+        refreshStepColours();
+    }
+
+    // edge-scroll while a pitch drag holds in the top/bottom band - see
+    // bassPitchEdgeScrollDirection/StepButton::edgeZonePx
+    if (bassPitchEdgeScrollDirection != 0)
+    {
+        tickPitchEdgeScroll (engine.bassPattern(), bassPitchViewportMin, bassPitchEdgeScrollDirection, bassPitchEdgeScrollStepIndex);
+        refreshBassPitchViewport (false);
+        refreshStepColours();
+    }
+    if (skankPitchEdgeScrollDirection != 0)
+    {
+        tickPitchEdgeScroll (engine.skankPattern(), skankPitchViewportMin, skankPitchEdgeScrollDirection, skankPitchEdgeScrollStepIndex);
+        refreshSkankPitchViewport (false);
         refreshStepColours();
     }
 }
@@ -1101,22 +1921,83 @@ void MainComponent::refreshStepColours()
         bassBtn.setSemitoneOffset (engine.bassPattern().getSemitoneOffset (bassIndex));
         bassBtn.setPlayhead (bassIndex == bassPlayheadStep);
     }
+    refreshBassGuideLines();
 
     int skankLength = engine.skankPattern().getActiveLength();
     for (int s = 0; s < RawDub::numSteps; ++s)
     {
+        auto& qualityBtn = skankChordQualityButtons[(size_t) s];
         int skankIndex = skankViewPage * RawDub::numSteps + s;
         if (skankIndex >= skankLength)
+        {
+            qualityBtn.setVisible (false);
             continue;
+        }
 
         auto& skankBtn = skankStepButtons[(size_t) s];
         skankBtn.setOn (engine.skankPattern().isOn (skankIndex));
         skankBtn.setLevel (engine.skankPattern().getLevel (skankIndex));
         skankBtn.setSemitoneOffset (engine.skankPattern().getSemitoneOffset (skankIndex));
         skankBtn.setPlayhead (skankIndex == skankPlayheadStep);
+
+        // chord quality only means anything for an active step - and
+        // only when Skank is actually the tab being viewed. This runs
+        // every timer tick regardless of which tab is active (same as
+        // the rest of this function), so without the tab check it would
+        // force these buttons back on over whatever switchInstrumentTab
+        // just hid, the moment any Skank step happens to be on.
+        if (currentInstrumentTab == 2 && engine.skankPattern().isOn (skankIndex))
+        {
+            bool minor = engine.skankPatternSlot().getChordIsMinor (skankIndex);
+            qualityBtn.setVisible (true);
+            qualityBtn.setButtonText (minor ? "min" : "Maj");
+            qualityBtn.setColour (juce::TextButton::buttonColourId, minor ? juce::Colours::black : juce::Colours::white);
+            qualityBtn.setColour (juce::TextButton::textColourOffId, minor ? juce::Colours::white : juce::Colours::black);
+        }
+        else
+        {
+            qualityBtn.setVisible (false);
+        }
+    }
+    refreshSkankGuideLines();
+
+    int snareLength = engine.snarePattern().getActiveLength();
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        int snareIndex = snareViewPage * RawDub::numSteps + s;
+        if (snareIndex >= snareLength)
+            continue;
+
+        auto& snareBtn = snareStepButtons[(size_t) s];
+        snareBtn.setOn (engine.snarePattern().isOn (snareIndex));
+        snareBtn.setLevel (engine.snarePattern().getLevel (snareIndex));
+        snareBtn.setPlayhead (snareIndex == snarePlayheadStep);
+    }
+
+    int hihatLength = engine.hihatPattern().getActiveLength();
+    for (int s = 0; s < RawDub::numSteps; ++s)
+    {
+        int hihatIndex = hihatViewPage * RawDub::numSteps + s;
+        if (hihatIndex >= hihatLength)
+            continue;
+
+        auto& hihatBtn = hihatStepButtons[(size_t) s];
+        hihatBtn.setOn (engine.hihatPattern().isOn (hihatIndex));
+        hihatBtn.setLevel (engine.hihatPattern().getLevel (hihatIndex));
+        hihatBtn.setPlayhead (hihatIndex == hihatPlayheadStep);
     }
 
     skankSawMixLaneEditor.setPlayheadStep (skankPlayheadStep);
+    for (auto& row : kickCurveRows)
+        row.curveEditor.setPlayheadStep (kickPlayheadStep);
+    for (auto& row : bassCurveRows)
+        row.curveEditor.setPlayheadStep (bassPlayheadStep);
+    for (auto& row : skankCurveRows)
+        row.curveEditor.setPlayheadStep (skankPlayheadStep);
+    for (auto& row : snareCurveRows)
+        row.curveEditor.setPlayheadStep (snarePlayheadStep);
+    for (auto& row : hihatCurveRows)
+        row.curveEditor.setPlayheadStep (hihatPlayheadStep);
 
     // page buttons: black = the page you're viewing/editing, grey = the
     // page currently playing (if different) - same black/white/grey
@@ -1143,6 +2024,8 @@ void MainComponent::refreshStepColours()
     refreshPageButtons (kickPageButtons, kickViewPage, kickPlayheadStep);
     refreshPageButtons (bassPageButtons, bassViewPage, bassPlayheadStep);
     refreshPageButtons (skankPageButtons, skankViewPage, skankPlayheadStep);
+    refreshPageButtons (snarePageButtons, snareViewPage, snarePlayheadStep);
+    refreshPageButtons (hihatPageButtons, hihatViewPage, hihatPlayheadStep);
 
     // length buttons: black = the length currently active for that voice -
     // same convention as page buttons, so you can tell each voice's
@@ -1160,6 +2043,8 @@ void MainComponent::refreshStepColours()
     refreshLengthButtons (kickLengthButtons, engine.kickPattern().getActiveLength());
     refreshLengthButtons (bassLengthButtons, engine.bassPattern().getActiveLength());
     refreshLengthButtons (skankLengthButtons, engine.skankPattern().getActiveLength());
+    refreshLengthButtons (snareLengthButtons, engine.snarePattern().getActiveLength());
+    refreshLengthButtons (hihatLengthButtons, engine.hihatPattern().getActiveLength());
 
     // pattern bank buttons: black = the pattern slot currently selected
     // for that instrument - same convention as Length/page buttons
@@ -1176,6 +2061,8 @@ void MainComponent::refreshStepColours()
     refreshBankButtons (kickPatternBankButtons, engine.getCurrentKickPatternIndex());
     refreshBankButtons (bassPatternBankButtons, engine.getCurrentBassPatternIndex());
     refreshBankButtons (skankPatternBankButtons, engine.getCurrentSkankPatternIndex());
+    refreshBankButtons (snarePatternBankButtons, engine.getCurrentSnarePatternIndex());
+    refreshBankButtons (hihatPatternBankButtons, engine.getCurrentHiHatPatternIndex());
 
     refreshGlobalPatternButtons();
 }
@@ -1204,25 +2091,18 @@ void MainComponent::updatePlayButtonText()
     playStopButton.setButtonText (engine.isPlaying() ? "Stop" : "Play");
 }
 
-// order must match the ParamSpec arrays set up in the constructor -
-// Kick: Tune/Punch/Decay/Drive/Volume, Bass: Tune/Drive/Cutoff/Resonance/Length/AM Depth/Volume
+// Every CurveableParamRow's slider value/curve/override state is
+// resynced generically by refreshAllOverrideControls (loops
+// allCurveableRows) - only the plain (non-curveable) rows and the
+// handful of non-slider controls (AM mode/ratio, chord quality, delay
+// bypass) need touching individually here.
 void MainComponent::refreshParamSlidersFromEngine()
 {
-    kickParamRows[0].slider.setValue ((double) engine.kick.tuneHz.load(),  juce::dontSendNotification);
-    kickParamRows[1].slider.setValue ((double) engine.kick.punchMs.load(), juce::dontSendNotification);
-    kickParamRows[2].slider.setValue ((double) engine.kick.decayMs.load(), juce::dontSendNotification);
-    kickParamRows[3].slider.setValue ((double) engine.kick.drive.load(),   juce::dontSendNotification);
-    kickParamRows[4].slider.setValue ((double) engine.kick.volume.load(),  juce::dontSendNotification);
+    refreshAllOverrideControls();
 
-    bassParamRows[0].slider.setValue ((double) engine.bass.tuneHz.load(),    juce::dontSendNotification);
-    // Drive/Cutoff (rows 1-2) are handled by refreshBassOverrideControls()
-    // below instead - they show the current Global Pattern's override
-    // value when one is active, not always the base value.
-    bassParamRows[3].slider.setValue ((double) engine.bass.resonance.load(), juce::dontSendNotification);
-    bassParamRows[4].slider.setValue ((double) engine.bass.decayMs.load(),   juce::dontSendNotification);
-    bassParamRows[5].slider.setValue ((double) engine.bass.amDepth.load(),   juce::dontSendNotification);
-    bassParamRows[6].slider.setValue ((double) engine.bass.volume.load(),    juce::dontSendNotification);
-    refreshBassOverrideControls();
+    kickPlainRows[0].slider.setValue ((double) engine.kick.volume.load(), juce::dontSendNotification);
+
+    bassPlainRows[0].slider.setValue ((double) engine.bass.volume.load(), juce::dontSendNotification);
 
     bool useAM = engine.bass.useAMMode.load();
     bassHarmonicModeButton.setButtonText (useAM ? "Harmonic: AM" : "Harmonic: Drive");
@@ -1231,51 +2111,335 @@ void MainComponent::refreshParamSlidersFromEngine()
     bassAmRatioButtons[1].setToggleState (ratio == 2.0f, juce::dontSendNotification);
     bassAmRatioButtons[2].setToggleState (ratio == 3.0f, juce::dontSendNotification);
 
-    skankParamRows[0].slider.setValue ((double) engine.skank.tuneHz.load(),  juce::dontSendNotification);
-    skankParamRows[1].slider.setValue ((double) engine.skank.sawMix.load(),  juce::dontSendNotification);
-    // Decay (row 2) is handled by refreshSkankOverrideControls() below
-    // instead - shows the current Global Pattern's override when active.
-    skankParamRows[3].slider.setValue ((double) engine.skank.drive.load(),   juce::dontSendNotification);
-    skankParamRows[4].slider.setValue ((double) engine.skank.volume.load(),  juce::dontSendNotification);
-    refreshSkankOverrideControls();
+    skankSawMixRow.slider.setValue ((double) engine.skank.sawMix.load(), juce::dontSendNotification);
+    skankPlainRows[0].slider.setValue ((double) engine.skank.volume.load(), juce::dontSendNotification);
     refreshPatternSharingIndicators();
     bool isMinor = engine.skank.minorChord.load();
     skankMajorButton.setToggleState (! isMinor, juce::dontSendNotification);
     skankMinorButton.setToggleState (isMinor, juce::dontSendNotification);
     skankSawMixLaneEditor.repaint();
+
+    snarePlainRows[0].slider.setValue ((double) engine.snare.volume.load(), juce::dontSendNotification);
+
+    hihatPlainRows[0].slider.setValue ((double) engine.hihat.volume.load(), juce::dontSendNotification);
+
+    delayParamRows[0].slider.setValue ((double) engine.delay.timeMs.load(),   juce::dontSendNotification);
+    delayParamRows[1].slider.setValue ((double) engine.delay.feedback.load(), juce::dontSendNotification);
+    delayParamRows[2].slider.setValue ((double) engine.delay.toneHz.load(),   juce::dontSendNotification);
+    delayParamRows[3].slider.setValue ((double) engine.delay.drive.load(),    juce::dontSendNotification);
+    delayParamRows[4].slider.setValue ((double) engine.delay.wet.load(),      juce::dontSendNotification);
+    bool bypassed = engine.delay.bypass.load();
+    delayBypassButton.setColour (juce::TextButton::buttonColourId, bypassed ? juce::Colours::black : juce::Colours::white);
+    delayBypassButton.setColour (juce::TextButton::textColourOffId, bypassed ? juce::Colours::white : juce::Colours::black);
 }
 
-// Drive/Cutoff show whichever value is actually in effect for the
-// current Global Pattern (override if active, base otherwise), and the
-// two toggle buttons reflect whether that pattern has one active - see
-// AudioEngine::ParamOverride and project_raw_dub_song_architecture memory.
-void MainComponent::refreshBassOverrideControls()
+// Slider's numeric VALUE only - see MainComponent.h's comment on why
+// this is separate from refreshCurveRow. Safe to call on a row with no
+// override mechanism at all (early-returns, slider value untouched).
+void MainComponent::refreshOverrideControls (CurveableParamRow& row)
 {
-    auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
-
-    bool driveActive = gp.bassDriveOverride.active.load();
-    bassDriveOverrideButton.setColour (juce::TextButton::buttonColourId, driveActive ? juce::Colours::black : juce::Colours::white);
-    bassDriveOverrideButton.setColour (juce::TextButton::textColourOffId, driveActive ? juce::Colours::white : juce::Colours::black);
-    bassParamRows[1].slider.setValue (driveActive ? (double) gp.bassDriveOverride.value.load() : (double) engine.bass.drive.load(),
-                                       juce::dontSendNotification);
-
-    bool cutoffActive = gp.bassCutoffOverride.active.load();
-    bassCutoffOverrideButton.setColour (juce::TextButton::buttonColourId, cutoffActive ? juce::Colours::black : juce::Colours::white);
-    bassCutoffOverrideButton.setColour (juce::TextButton::textColourOffId, cutoffActive ? juce::Colours::white : juce::Colours::black);
-    bassParamRows[2].slider.setValue (cutoffActive ? (double) gp.bassCutoffOverride.value.load() : (double) engine.bass.cutoffHz.load(),
-                                       juce::dontSendNotification);
+    if (! row.getOverrideMap)
+        return;
+    auto* ov = RawDub::AudioEngine::findOverride (row.getOverrideMap(), row.paramId);
+    bool active = ov != nullptr && ov->active.load();
+    row.slider.setValue (active ? (double) ov->value.load() : (double) row.baseParam->load(), juce::dontSendNotification);
+    refreshCurveRow (row);
 }
 
-// same idea as refreshBassOverrideControls, for Skank's Decay override
-void MainComponent::refreshSkankOverrideControls()
+void MainComponent::refreshAllOverrideControls()
 {
-    auto& gp = engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()];
+    for (auto* row : allCurveableRows)
+        refreshOverrideControls (*row);
+}
 
-    bool decayActive = gp.skankDecayOverride.active.load();
-    skankDecayOverrideButton.setColour (juce::TextButton::buttonColourId, decayActive ? juce::Colours::black : juce::Colours::white);
-    skankDecayOverrideButton.setColour (juce::TextButton::textColourOffId, decayActive ? juce::Colours::white : juce::Colours::black);
-    skankParamRows[2].slider.setValue (decayActive ? (double) gp.skankDecayOverride.value.load() : (double) engine.skank.decayMs.load(),
-                                        juce::dontSendNotification);
+// Wires one CurveableParamRow to a specific parameter, on any
+// instrument - "any continuous parameter can become curve-capable" (see
+// project_raw_dub_song_architecture memory) made concrete: this one
+// function is what makes every row behave identically, regardless of
+// which parameter or instrument it's for. Interaction model: title =
+// phrase-level (curve), value box = section-level (override), slider =
+// edit whichever is selected - see MainComponent.h's comment on
+// CurveableParamRow for the full reasoning. getPattern/getOverrideMap
+// resolve dynamically (see CurveableParamRow's own comment) - a bare
+// std::function, not a reference, since the actual pattern/GlobalPattern
+// each points to can change independently of this row's own lifetime.
+void MainComponent::setupCurveableParam (CurveableParamRow& row, const juce::String& name, std::atomic<float>& baseParam,
+                                          double minV, double maxV, double step, int paramId, int ownerTab,
+                                          std::function<RawDub::StepPattern& ()> getPattern,
+                                          std::function<RawDub::AudioEngine::OverrideMap& ()> getOverrideMap)
+{
+    row.paramId = paramId;
+    row.ownerTab = ownerTab;
+    row.baseName = name;
+    row.baseParam = &baseParam;
+    row.rangeMin = (float) minV;
+    row.rangeMax = (float) maxV;
+    row.getPattern = std::move (getPattern);
+    row.getOverrideMap = std::move (getOverrideMap);
+
+    pageContent.addAndMakeVisible (row.label);
+    row.label.setText (name, juce::dontSendNotification);
+
+    pageContent.addAndMakeVisible (row.slider);
+    row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+    row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+    row.slider.setOverrideCapable (static_cast<bool> (row.getOverrideMap));
+    row.slider.setRange (minV, maxV, step);
+    row.slider.setValue ((double) baseParam.load(), juce::dontSendNotification);
+    row.slider.setScrollWheelEnabled (false); // page now scrolls under the mouse - a slider must never eat that wheel event
+
+    pageContent.addChildComponent (row.curveEditor); // starts hidden - see refreshCurveRow
+
+    // TITLE click - phrase-level. No curve yet: create one, seeded flat
+    // at whatever the slider currently shows (never a silent jump in
+    // sound - "a fixed value is simply a flat curve"), and expand it
+    // immediately. Curve already exists: toggle the editor open/closed -
+    // the curve itself stays fully active for playback either way.
+    row.label.onLabelClick = [this, &row]
+    {
+        if (row.curveExpanded)
+        {
+            // collapsing - if nothing was ever actually drawn (still
+            // just the flat seed from creation, or flattened back down
+            // since), remove it outright rather than leave a title still
+            // reading "~" for a curve nobody ever shaped - same "a
+            // flattened curve is no curve" rule as the slider/point-edit
+            // paths use.
+            row.curveExpanded = false;
+            if (auto* curve = activeCurve (row))
+                if (curve->isFlat())
+                    removeActiveCurve (row);
+        }
+        else
+        {
+            // expanding - materialize into the active scope if it isn't
+            // already there (idempotent: no-op if it already has its own
+            // curve). This is what lets an active Override "pick up" a
+            // dormant pattern curve the first time it's actually opened,
+            // seeded from that curve's own shape (see
+            // curveAvailableHere's comment) - never a silent jump, and
+            // never leaves the editor showing default/blank data for a
+            // curve curveAvailableHere just promised was there.
+            float v = (float) row.slider.getValue();
+            float normalized = row.rangeMax > row.rangeMin ? (v - row.rangeMin) / (row.rangeMax - row.rangeMin) : 0.0f;
+            activeCurveOrCreate (row, normalized);
+            row.curveExpanded = true;
+        }
+        refreshCurveRow (row);
+        resized();
+    };
+
+    // VALUE BOX click - section-level. Only wired for rows that actually
+    // have an override mechanism (ValueBoxSlider ignores this entirely
+    // otherwise, per setOverrideCapable above).
+    row.slider.onValueBoxClick = [this, &row]
+    {
+        if (! row.getOverrideMap)
+            return;
+        auto& ov = RawDub::AudioEngine::getOrCreateOverride (row.getOverrideMap(), row.paramId);
+        bool newActive = ! ov.active.load();
+        // seed with the current base value so turning an override on
+        // never silently jumps the sound - it starts as a no-op. Any
+        // curve the override already owns (from a previous time it was
+        // active) is deliberately left alone either way - toggling off
+        // doesn't discard it, so toggling back on later picks up right
+        // where you left it, same as the flat value already does.
+        if (newActive)
+            ov.value.store (row.baseParam->load());
+        else
+            row.curveExpanded = false; // leaving this row's curve scope - nothing to show open
+        ov.active.store (newActive);
+        refreshOverrideControls (row);
+        resized();
+    };
+
+    // SLIDER - always just edits whichever value is currently selected
+    // (section override if active, else the instrument's base value) -
+    // unchanged from before curves existed. If a curve is ALSO active,
+    // touching the slider REMOVES it outright rather than merely
+    // flattening it - a flattened curve is behaviourally identical to no
+    // curve, so it doesn't linger as a hidden object once the slider has
+    // been used (see MainComponent.h's comment on CurveableParamRow).
+    row.slider.onValueChange = [this, &row]
+    {
+        float v = (float) row.slider.getValue();
+        if (row.getOverrideMap)
+        {
+            auto& ov = RawDub::AudioEngine::getOrCreateOverride (row.getOverrideMap(), row.paramId);
+            if (ov.active.load())
+                ov.value.store (v);
+            else
+                row.baseParam->store (v);
+        }
+        else
+        {
+            row.baseParam->store (v);
+        }
+
+        if (activeCurveExists (row))
+        {
+            removeActiveCurve (row);
+            row.curveExpanded = false;
+            refreshCurveRow (row);
+            resized();
+        }
+    };
+
+    row.curveEditor.getPointCount = [this, &row] { auto* c = activeCurve (row); return c ? c->getPointCount() : 2; };
+    row.curveEditor.getPointPosition = [this, &row] (int i) { auto* c = activeCurve (row); return c ? c->getPointPosition (i) : (float) i; };
+    row.curveEditor.getPointValue = [this, &row] (int i) { auto* c = activeCurve (row); return c ? c->getPointValue (i) : 0.5f; };
+    // Point-value edits and removals can flatten a curve too (dragging
+    // points together, or removing all but two equal-value anchors) -
+    // same auto-removal rule as the slider, checked here via isFlat()
+    // since resetToValue() isn't involved on this path.
+    row.curveEditor.onPointValueChanged = [this, &row] (int i, float v)
+    {
+        auto* c = activeCurve (row);
+        if (c == nullptr)
+            return;
+        c->setPointValue (i, v);
+        if (c->isFlat())
+        {
+            removeActiveCurve (row);
+            row.curveExpanded = false;
+            refreshCurveRow (row);
+            resized();
+        }
+    };
+    row.curveEditor.onPointPositionChanged = [this, &row] (int i, float p) { if (auto* c = activeCurve (row)) c->setPointPosition (i, p); };
+    row.curveEditor.onAddPoint = [this, &row] (float p, float v) { auto* c = activeCurve (row); return c ? c->insertPoint (p, v) : -1; };
+    row.curveEditor.onRemovePoint = [this, &row] (int i)
+    {
+        auto* c = activeCurve (row);
+        if (c == nullptr)
+            return;
+        c->removePoint (i);
+        if (c->isFlat())
+        {
+            removeActiveCurve (row);
+            row.curveExpanded = false;
+            refreshCurveRow (row);
+            resized();
+        }
+    };
+
+    refreshCurveRow (row);
+    allCurveableRows.push_back (&row);
+}
+
+bool MainComponent::rowOverrideActive (const CurveableParamRow& row) const
+{
+    if (! row.getOverrideMap)
+        return false;
+    auto* ov = RawDub::AudioEngine::findOverride (row.getOverrideMap(), row.paramId);
+    return ov != nullptr && ov->active.load();
+}
+
+RawDub::PointCurve* MainComponent::activeCurve (CurveableParamRow& row)
+{
+    if (rowOverrideActive (row))
+    {
+        auto* ov = RawDub::AudioEngine::findOverride (row.getOverrideMap(), row.paramId);
+        return (ov != nullptr && ov->hasCurve.load()) ? &ov->curve : nullptr;
+    }
+    return row.getPattern().findCurve (row.paramId);
+}
+
+RawDub::PointCurve& MainComponent::activeCurveOrCreate (CurveableParamRow& row, float seedNormalized)
+{
+    if (rowOverrideActive (row))
+    {
+        auto& ov = RawDub::AudioEngine::getOrCreateOverride (row.getOverrideMap(), row.paramId);
+        if (! ov.hasCurve.load())
+        {
+            // seed from the pattern's own curve shape if it has one -
+            // "start editing under Override" begins from what you were
+            // already hearing, not a silent jump to flat - otherwise
+            // start flat, same "never a silent jump" rule as everywhere
+            // else a curve gets created.
+            if (auto* patternCurve = row.getPattern().findCurve (row.paramId))
+                ov.curve.copyFrom (*patternCurve);
+            else
+                ov.curve.resetToValue (seedNormalized);
+            ov.hasCurve.store (true);
+        }
+        return ov.curve;
+    }
+    return row.getPattern().getOrCreateCurve (row.paramId, seedNormalized);
+}
+
+bool MainComponent::activeCurveExists (const CurveableParamRow& row) const
+{
+    if (rowOverrideActive (row))
+    {
+        auto* ov = RawDub::AudioEngine::findOverride (row.getOverrideMap(), row.paramId);
+        return ov != nullptr && ov->hasCurve.load();
+    }
+    return row.getPattern().hasCurve (row.paramId);
+}
+
+void MainComponent::removeActiveCurve (CurveableParamRow& row)
+{
+    if (rowOverrideActive (row))
+    {
+        if (auto* ov = RawDub::AudioEngine::findOverride (row.getOverrideMap(), row.paramId))
+            ov->hasCurve.store (false);
+    }
+    else
+    {
+        row.getPattern().removeCurve (row.paramId);
+    }
+}
+
+bool MainComponent::curveAvailableHere (const CurveableParamRow& row) const
+{
+    if (activeCurveExists (row))
+        return true;
+    // override active but has no curve of its own YET - the pattern's
+    // curve is still there underneath, just dormant (see this function's
+    // header comment). Only relevant when override is active: when it's
+    // not, activeCurveExists above already checked the pattern directly.
+    if (rowOverrideActive (row))
+        return row.getPattern().hasCurve (row.paramId);
+    return false;
+}
+
+// Resyncs one row's title text, value-box colour, and curve-editor
+// visibility to its instrument's current pattern state - called
+// whenever that state may have changed out from under the UI (pattern
+// switch, project load, title/value-box click). Does NOT touch the
+// slider's numeric value - that stays whoever last set it
+// (refreshParamSlidersFromEngine / refreshOverrideControls), since
+// the slider always represents "the last explicit value," independent
+// of whatever the curve is doing during playback (same as SawMix
+// already does for Skank).
+void MainComponent::refreshCurveRow (CurveableParamRow& row)
+{
+    // Label uses the broader "available here" check (includes a dormant
+    // pattern curve sitting under an active override) so the indicator
+    // never silently vanishes just because Override was switched on -
+    // see curveAvailableHere's comment. Editor visibility below stays on
+    // the STRICT in-scope check - a dormant curve isn't directly on
+    // screen until the title is actually clicked to materialize it.
+    bool hasCurve = activeCurveExists (row);
+    row.label.setText (curveAvailableHere (row) ? ("~ " + row.baseName) : row.baseName, juce::dontSendNotification);
+
+    // Gated on this row's OWN instrument tab actually being the one
+    // showing - this runs from more than just that tab's local code
+    // (e.g. switchInstrumentTab calls it to re-correct its own blanket
+    // show/hide), so without this check it would happily re-show a
+    // curve editor while a different instrument tab is active, the same
+    // visibility bug this project has hit before with other per-tab
+    // components.
+    bool showEditor = hasCurve && row.curveExpanded && currentInstrumentTab == row.ownerTab;
+    row.curveEditor.setVisible (showEditor);
+    row.curveEditor.setGridDivisions (row.getPattern().getActiveLength());
+    row.curveEditor.repaint();
+
+    bool overrideActive = rowOverrideActive (row);
+    row.slider.setColour (juce::Slider::textBoxBackgroundColourId, overrideActive ? juce::Colours::black : juce::Colours::white);
+    row.slider.setColour (juce::Slider::textBoxTextColourId, overrideActive ? juce::Colours::white : juce::Colours::black);
+    row.slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::black);
 }
 
 // "Make Unique" indicators - see AudioEngine::globalPatternsReferencingKick
@@ -1297,26 +2461,46 @@ void MainComponent::refreshPatternSharingIndicators()
         return s;
     };
 
+    // This gets called from many places that don't know/care which tab
+    // is active (pattern-bank clicks, Global Pattern recall, New/Open,
+    // Make Unique - not just switchInstrumentTab), so each instrument's
+    // visibility must be gated on its own tab being the current one -
+    // otherwise a Bass action could force Kick's indicator visible again
+    // over whatever switchInstrumentTab had already hidden.
     auto kickRefs = engine.globalPatternsReferencingKick (engine.getCurrentKickPatternIndex());
-    bool kickShared = kickRefs.size() > 1;
+    bool kickShared = currentInstrumentTab == 0 && kickRefs.size() > 1;
     kickSharedLabel.setVisible (kickShared);
     kickMakeUniqueButton.setVisible (kickShared);
     if (kickShared)
         kickSharedLabel.setText (formatSharedWith (kickRefs), juce::dontSendNotification);
 
     auto bassRefs = engine.globalPatternsReferencingBass (engine.getCurrentBassPatternIndex());
-    bool bassShared = bassRefs.size() > 1;
+    bool bassShared = currentInstrumentTab == 1 && bassRefs.size() > 1;
     bassSharedLabel.setVisible (bassShared);
     bassMakeUniqueButton.setVisible (bassShared);
     if (bassShared)
         bassSharedLabel.setText (formatSharedWith (bassRefs), juce::dontSendNotification);
 
     auto skankRefs = engine.globalPatternsReferencingSkank (engine.getCurrentSkankPatternIndex());
-    bool skankShared = skankRefs.size() > 1;
+    bool skankShared = currentInstrumentTab == 2 && skankRefs.size() > 1;
     skankSharedLabel.setVisible (skankShared);
     skankMakeUniqueButton.setVisible (skankShared);
     if (skankShared)
         skankSharedLabel.setText (formatSharedWith (skankRefs), juce::dontSendNotification);
+
+    auto snareRefs = engine.globalPatternsReferencingSnare (engine.getCurrentSnarePatternIndex());
+    bool snareShared = currentInstrumentTab == 3 && snareRefs.size() > 1;
+    snareSharedLabel.setVisible (snareShared);
+    snareMakeUniqueButton.setVisible (snareShared);
+    if (snareShared)
+        snareSharedLabel.setText (formatSharedWith (snareRefs), juce::dontSendNotification);
+
+    auto hihatRefs = engine.globalPatternsReferencingHiHat (engine.getCurrentHiHatPatternIndex());
+    bool hihatShared = currentInstrumentTab == 4 && hihatRefs.size() > 1;
+    hihatSharedLabel.setVisible (hihatShared);
+    hihatMakeUniqueButton.setVisible (hihatShared);
+    if (hihatShared)
+        hihatSharedLabel.setText (formatSharedWith (hihatRefs), juce::dontSendNotification);
 }
 
 void MainComponent::setVoiceLength (RawDub::StepPattern& pattern, int newLength, int& viewPage)
@@ -1325,4 +2509,99 @@ void MainComponent::setVoiceLength (RawDub::StepPattern& pattern, int newLength,
     viewPage = 0;
     refreshStepColours();
     resized();
+}
+
+// "I should immediately see the musical material [a pattern] contains"
+// - if its active steps all fit inside the default root-centered view,
+// leave the view alone; otherwise shift just enough to include them,
+// centering on the pattern's own pitch range if it's wider than one
+// window's worth.
+int MainComponent::computeAutoCenteredPitchViewportMin (const RawDub::StepPattern& pattern)
+{
+    constexpr int defaultMin = -12;
+
+    int lo = RawDub::StepPattern::maxSemitoneOffset + 1;
+    int hi = -RawDub::StepPattern::maxSemitoneOffset - 1;
+
+    for (int i = 0; i < RawDub::StepPattern::maxLength; ++i)
+    {
+        if (! pattern.isOn (i))
+            continue;
+
+        int off = pattern.getSemitoneOffset (i);
+        lo = juce::jmin (lo, off);
+        hi = juce::jmax (hi, off);
+    }
+
+    if (lo > hi) // no active steps at all
+        return defaultMin;
+
+    if (lo >= defaultMin && hi <= defaultMin + pitchViewportSize)
+        return defaultMin;
+
+    int center = (lo + hi) / 2;
+    return center - pitchViewportSize / 2;
+}
+
+// Guide lines only mean anything as a live reference while you're
+// actually looking at an existing note or placing/modifying one - never
+// all the time (clutter on a grid at rest), and always exactly one
+// line, never a survey of the whole pattern: hovering shows that step's
+// own pitch, dragging shows the dragged step's live pitch (which sweeps
+// through as you drag, so you can see it align against another step's
+// bar without needing every pitch drawn at once).
+void MainComponent::refreshBassGuideLines()
+{
+    std::vector<int> pitches;
+    if (bassDraggingStepIndex >= 0)
+        pitches = { engine.bassPattern().getSemitoneOffset (bassDraggingStepIndex) };
+    else if (bassHoveredStepIndex >= 0 && engine.bassPattern().isOn (bassHoveredStepIndex))
+        pitches = { engine.bassPattern().getSemitoneOffset (bassHoveredStepIndex) };
+
+    for (auto& btn : bassStepButtons)
+        btn.setGuidePitches (pitches);
+}
+
+void MainComponent::refreshSkankGuideLines()
+{
+    std::vector<int> pitches;
+    if (skankDraggingStepIndex >= 0)
+        pitches = { engine.skankPattern().getSemitoneOffset (skankDraggingStepIndex) };
+    else if (skankHoveredStepIndex >= 0 && engine.skankPattern().isOn (skankHoveredStepIndex))
+        pitches = { engine.skankPattern().getSemitoneOffset (skankHoveredStepIndex) };
+
+    for (auto& btn : skankStepButtons)
+        btn.setGuidePitches (pitches);
+}
+
+void MainComponent::refreshBassPitchViewport (bool autoCenter)
+{
+    if (autoCenter)
+        bassPitchViewportMin = computeAutoCenteredPitchViewportMin (engine.bassPattern());
+    for (auto& btn : bassStepButtons)
+        btn.setPitchViewport (bassPitchViewportMin, bassPitchViewportMin + pitchViewportSize);
+    bassPitchRangeLabel.setText (juce::String (bassPitchViewportMin) + ".." + juce::String (bassPitchViewportMin + pitchViewportSize) + " st",
+                                  juce::dontSendNotification);
+}
+
+void MainComponent::refreshSkankPitchViewport (bool autoCenter)
+{
+    if (autoCenter)
+        skankPitchViewportMin = computeAutoCenteredPitchViewportMin (engine.skankPattern());
+    for (auto& btn : skankStepButtons)
+        btn.setPitchViewport (skankPitchViewportMin, skankPitchViewportMin + pitchViewportSize);
+    skankPitchRangeLabel.setText (juce::String (skankPitchViewportMin) + ".." + juce::String (skankPitchViewportMin + pitchViewportSize) + " st",
+                                   juce::dontSendNotification);
+}
+
+// shared by both instruments' timerCallback ticks - advances the
+// dragged step's pitch by one semitone and scrolls the viewport to
+// match, for as long as the edge zone is held (see StepButton::edgeZonePx)
+void MainComponent::tickPitchEdgeScroll (RawDub::StepPattern& pattern, int& viewportMin, int direction, int stepIndex)
+{
+    int newOffset = juce::jlimit (-RawDub::StepPattern::maxSemitoneOffset, RawDub::StepPattern::maxSemitoneOffset,
+                                   pattern.getSemitoneOffset (stepIndex) + direction);
+    pattern.setSemitoneOffset (stepIndex, newOffset);
+    viewportMin = juce::jlimit (-RawDub::StepPattern::maxSemitoneOffset, RawDub::StepPattern::maxSemitoneOffset - pitchViewportSize,
+                                 viewportMin + direction);
 }

@@ -1,0 +1,386 @@
+RAW DUB PROTOTYPE - BASS: UK DUB PRESSURE ANALYSIS
+=======================================================================
+Written 2026-07-07, before implementing any of the changes below.
+Revised repeatedly since - most recently to fold what were separate,
+sequential "Phase 1/3/4" items (Pitch Envelope, Filter Envelope,
+Dynamic Saturation) into a single TRANSIENT BEHAVIOUR phase with three
+experiments inside it, once listening confirmed they're facets of one
+phenomenon rather than independent features. Treat the content below
+as the current, authoritative version.
+
+Context: after several sessions of building the app's architecture
+(pattern banks, Global Patterns, Song hierarchy, section-level voicing
+overrides, pitch viewport/scrolling), attention returned to the Bass
+instrument's actual sound. The verdict: technically solid, but reads
+as "clean synth note," not UK dub sound-system pressure.
+
+
+1. WHERE WE ARE NOW
+-----------------------------------------------------------------------
+Signal path (BassSynth::applyTrigger / renderAdd), per note:
+
+  1. Oscillator: single sine wave at Tune x 2^(semitone/12), pitch-bent
+     briefly at onset by Transient Behaviour Experiment A (see below).
+  2. Harmonic generation - two independent paths, never stacked:
+     - Drive mode (default): tanh saturation, shaped = tanh(osc*k)/
+       tanh(k), k = 1 + Drive*12. A small FIXED "warmth" component
+       (2nd harmonic, osc^2 - 0.5, weight 0.12) is always added AFTER
+       the tanh stage, not fed into it (measured: feeding it in caused
+       intermodulation that read as "digital dirtiness").
+     - AM mode (research switch, not a settled part of the identity):
+       bypasses Drive/warmth entirely, locked-ratio (1:1/2:1/3:1)
+       amplitude modulation with a fixed makeup-gain correction.
+  3. Filter: state-variable (Chamberlin) lowpass, driven by Cutoff and
+     Resonance, cutoff briefly opened at onset by Experiment B (see
+     below) - otherwise static through the sustain.
+  4. Envelope: 3ms quadratic attack -> hold for Length (decayMs) ->
+     100ms fixed raised-cosine release (not user-facing - "release
+     only when the note is explicitly finished").
+  5. Monophonic choke: retriggering while a note sounds forces an 8ms
+     fast release to true silence first - never a crossfade. This was
+     a specific, hard-won click-elimination fix earlier in the project.
+  6. Output: sample * 0.6 (fixed headroom) * Volume, then the whole
+     mix gets a soft tanh limiter at the engine level.
+
+Every parameter, and which layer(s) it lives at:
+
+  Param              Base   Section override   Curve
+  Tune               yes    -                  -
+  Drive              yes    yes                -
+  Cutoff             yes    yes                -
+  Resonance          yes    yes                -
+  Length (decayMs)   yes    -                  -
+  Volume             yes    -  (deliberate)     -
+  AM mode/ratio/depth yes    -                  -
+  Pitch Env Amount   yes    -                  -
+  Filter Env Amount  yes    -                  -
+
+No Bass parameter is curve-capable yet (that's exclusively a Skank
+thing so far - SawMix). Section overrides use a flat value per Global
+Pattern (see project_raw_dub_song_architecture memory); the agreed
+rule for any FUTURE curve-capable param is "always represented as one
+curve, flat = section value, shaped = phrase gesture" - never a
+parallel override-vs-curve system.
+
+Separately, on the composing side (not synthesis): per-step pitch
+across a +/-36 semitone range with a scrolling viewport, edge-scroll,
+wheel-scroll, and hover/drag-gated guide lines. Not part of this
+analysis, but worth remembering it's a different layer entirely from
+the DSP discussed here.
+
+
+2. DESIGN PHILOSOPHY (the governing frame for everything below)
+-----------------------------------------------------------------------
+The current synth already has a strong identity: single oscillator,
+pre-filter harmonic generation, simple signal path, stable/deep bass
+character, monophonic behaviour. The goal is explicitly NOT to make it
+more complex or more "modern" - it should stay recognisably minimal
+and restrained.
+
+    THE MISSING INGREDIENT IS LIFE, NOT COMPLEXITY.
+
+This is the standing filter for every future idea about this
+instrument, not just the phases below. Before adding anything, ask:
+does this make the note more alive, or does this just make the synth
+more complicated? Those are very different questions, and only the
+first one is this instrument's job.
+
+Guiding principle for every experiment below:
+
+    A note should come alive during its first 30-100ms, then settle
+    into an unwavering, powerful sustain.
+
+Notice what this roadmap does NOT touch anywhere: sustain, oscillator,
+waveform, modulation. Everything happens in the same place:
+
+    Attack -> Life -> Stable sustain
+
+That's a healthy constraint, not an oversight - it's exactly what keeps
+this from turning into a bigger redesign.
+
+Development principle (matches this project's existing DSP protocol -
+see feedback_raw_dub_experiment_protocol memory): every sonic change
+implemented independently, one variable moved at a time. Workflow for
+each: implement or adjust one thing, compare against reference tracks,
+A/B with the change reverted/disabled, decide before moving on. Never
+change multiple things simultaneously - it makes evaluation impossible.
+
+STANDING RULE ON PARAMETERS: avoid adding parameters unless repeated
+listening shows that exposing them improves musical use. Default to
+fewer exposed controls, not more - expose the minimum (e.g. just
+Amount, with decay times fixed internally), and only add a control
+once a listening report specifically asks for it, never speculatively
+"in case it's useful."
+
+
+3. ROADMAP
+-----------------------------------------------------------------------
+PHASE 1 - TRANSIENT BEHAVIOUR (in progress)
+
+Originally framed as three separate, sequential phases (Pitch
+Envelope, then later Filter Envelope, then later Dynamic Saturation).
+Reframed after listening: Pitch Envelope kept reading kick-like no
+matter how it was tuned IN ISOLATION, but became "much more musically
+useful" in informal testing once combined with filter movement. These
+aren't three features to perfect one at a time - they're three facets
+of one phenomenon, each individually small, together producing the
+illusion of a note settling into place. This is common in analogue
+instruments: no single modulation is dramatic, the combination is what
+reads as alive. Each still gets built and understood as its own
+experiment (one variable at a time, per the development principle
+above) - but the FINAL tuning pass happens on the combination, not on
+any one experiment judged alone.
+
+  Experiment A - Pitch settling
+    Subtle downward pitch movement at note onset, exponential decay to
+    the stable target pitch. Only Amount exposed (semitones), decay
+    time fixed internally. Sustain pitch stays perfectly stable.
+    STATUS: implemented and confirmed by listening. Default 0.5
+    semitone, 100ms decay - representative of the confirmed-good
+    0.3-0.8 semitone range once judged together with Experiment B, not
+    a "best" value found tuning alone (isolated tuning was hitting
+    diminishing returns).
+
+  Experiment B - Filter opening/closing
+    Cutoff opens briefly above the base Cutoff at note onset,
+    exponential decay back down - positive only (opens, never closes
+    below base) for now, attack only, no sustained modulation, no
+    wobble. Only Amount exposed (Hz added to Cutoff), decay time fixed
+    internally. STATUS: implemented and confirmed by listening. Default
+    300Hz, 60ms decay - representative of the confirmed-good roughly
+    200-400Hz range once judged together with Experiment A.
+
+  Experiment C - Dynamic saturation during attack
+    Not "more distortion" - the circuit behaving differently during
+    the transient: drive = baseDrive + attackEnvelope * transientAmount,
+    returning smoothly to normal drive. No new modulation should be
+    audible - attacks should just read slightly richer than sustains.
+    Deliberately NO exposed parameter (per this pass's finding: the
+    transient system must never register as an audible effect, only as
+    physical weight - this is meant to be felt, not tuned). Drive mode
+    only, AM mode unaffected. STATUS: implemented, one listening pass
+    in. First guess of +0.12 drive at onset read as its own effect
+    rather than felt attack weight - lowered to +0.06, decay (~70ms)
+    unchanged, awaiting the next report. Still worth doing at some
+    point: asymmetric saturation (tanh((x+bias)*drive) instead of
+    symmetric tanh) - a smaller, separate refinement of the same idea,
+    not yet started.
+
+  NEXT STEP: get a first listening report on Experiment C, alongside
+  A+B, using the same boundary established in this pass - if the
+  saturation change becomes audible as its own effect rather than felt
+  as attack weight, it's too strong. Once C is settled, Phase 1 as a
+  whole (all three experiments together) gets one final combined pass.
+
+PHASE 2 - Section Length Override
+  Pure infrastructure, no DSP change. Reuse the existing section
+  override system already built for Drive/Cutoff/Resonance. Zero
+  sound-design risk - increases musical expressiveness, nothing else.
+  Not yet implemented - can happen alongside/after Phase 1 since it
+  needs no listening judgement.
+
+PHASE 3 - Cabinet / Bandwidth Voicing
+  Lightweight output voicing stage, not speaker modelling: soften
+  extreme highs, reinforce perceived low-end weight, gently shape the
+  overall spectrum. "Sound-system voicing," not guitar cabinet sim.
+  Extremely subtle.
+
+PHASE 4 - Glide / Portamento
+  Only after the core tone feels correct - changes musical phrasing,
+  not timbre, so it belongs after the sound itself is settled. Modes:
+  Off / Always / Legato.
+
+PHASE 5 - Future Expressiveness (prep only, not implementation yet)
+  Prepare the synth to respond to future sequencing features -
+  velocity, accents, note emphasis. Rather than affecting volume
+  alone, accents could gently influence Filter Env amount, attack
+  drive, Pitch Env depth - expressive basslines without adding
+  complexity to the synthesis engine itself.
+
+
+4. EXPLICITLY NOT RECOMMENDED - PART OF THIS INSTRUMENT'S IDENTITY
+-----------------------------------------------------------------------
+Not just "not yet" - this list is as much a part of what Raw Dub Bass
+IS as anything in the roadmap above. It's much easier to keep adding
+another oscillator, another waveform, FM, unison than it is to hold the
+line and say "no, that's not what this instrument is." Avoid anything
+that moves the instrument toward modern bass synthesis:
+  - additional oscillators
+  - supersaw/unison
+  - detuning
+  - PWM
+  - FM operators
+  - wavetable synthesis
+  - LFO-based filter wobble
+  - stereo widening
+
+Prior experimentation on this project already suggests additional
+oscillators increase weight while reducing cohesion and character (the
+Foundation/Character split was tried and rolled back - "heavier, but
+disconnected/lifeless"). The instrument should derive richness from
+nonlinear behaviour and transient dynamics, not oscillator complexity.
+
+
+5. LISTENING LOG (Transient Behaviour, Experiment A - Pitch settling)
+-----------------------------------------------------------------------
+Pass 1: default of 3.0 semitones made the pitch movement itself
+audible/kick-like, working against the goal - lowered to 1.0 semitone.
+
+Pass 2: at 1.0 semitone with the original 50ms fixed decay, it still
+read too much like a kick - diagnosed as the decay being too
+short/percussive, not the amount. Raised fixed decay 50ms -> 100ms.
+
+Pass 3: still too percussive at 100ms - raised again to 150ms.
+Alongside this, an important finding: judged in ISOLATION, Pitch Env
+kept reading somewhat kick-like regardless of decay length, but small
+amounts (roughly 1.0-1.3 semitones) read as "much more musically
+useful" in informal testing once combined with filter movement -
+this is what triggered the Transient Behaviour reframe in section 3.
+
+Pass 4 (reframing pass): rather than keep chasing a "best" decay value
+in isolation, settled on a REPRESENTATIVE default (1.0 semitone, 100ms
+decay, i.e. reverted from the 150ms of pass 3) and moved on to building
+Experiment B, on the expectation that Pitch Env's exact tuning will be
+revisited once both experiments exist and can be judged together, not
+before. Prediction on record: once Experiment B exists, Experiment A's
+amount will likely be reduced further, since right now it's the only
+mechanism doing the work.
+
+Pass 5 (prediction confirmed): with Experiment B built and both judged
+together, the most convincing sound combined a very small Pitch Env
+(0.3-0.8 semitone) with a subtle Filter Env - NOT Pitch Env carrying
+the transient alone at a larger amount. Default lowered 1.0 -> 0.5
+semitone, representative of that confirmed range. This also sharpened
+the philosophy itself: the transient should never become an audible
+EFFECT (an obvious pitch bend or filter sweep reads as dubstep, not UK
+dub) - it should only add physical weight to the attack before the
+note settles. This boundary now governs Experiment C too (see below).
+
+
+6. TRANSIENT MODULE ARCHITECTURE - a parameter exposure correction
+-----------------------------------------------------------------------
+Written 2026-07-08, ANALYSIS ONLY - not implemented, no go-ahead given
+yet. After a few more listening sessions, a design correction: the
+"one exposed slider per experiment, everything else hardcoded" pattern
+was useful for isolating experiments, but shouldn't become the
+permanent architecture. It optimised for minimum PARAMETER COUNT
+instead of minimum MUSICAL CONCEPT count - different goals. New
+principle: one musical phenomenon = one small module, each module
+exposing only the parameters that are irreducibly part of that
+phenomenon - not zero, not everything internal, whatever the
+phenomenon actually needs.
+
+What went wrong, specifically: "expose the minimum until listening
+proves more is needed" got applied as if silence meant no evidence.
+For Pitch Transient it wasn't silence - three listening passes
+(50->100->150ms, then back to 100ms) only happened because Decay
+mattered enough to keep chasing. That's not absence of evidence, it's
+a parameter already proven to matter, routed through code edits and
+rebuilds purely because it wasn't wired up as a control yet. The rule
+was right in spirit but applied uniformly instead of per-parameter -
+it couldn't tell "unproven" (Drive's decay) apart from "proven, just
+not exposed" (Pitch's decay).
+
+Which behaviours need more than Amount:
+  - Pitch Transient: YES, confirmed - not by analogy, by this
+    project's own listening history. At a fixed Amount, Decay alone
+    moved the result between "percussive/kick-like" and "settling
+    into place." An independent musical axis, not an implementation
+    detail.
+  - Filter Transient: YES, predicted but not yet confirmed the same
+    way - no isolated decay-only test has been run on it yet. Filter
+    envelope decay is one of the most standard expressive controls in
+    subtractive synthesis generally, and it occupies the identical
+    structural role Pitch's does (Amount = how far, Decay = how fast
+    it settles). Strong prior, not yet proof from this instrument.
+  - Drive Transient: genuinely UNRESOLVED, as originally framed.
+    Amount has only been moved once. Nothing yet distinguishes
+    "doesn't need Decay" from "hasn't been tested."
+
+Which are complete with Amount alone: none, as things currently stand.
+The single-slider shape wasn't earned by evidence for Pitch or Filter -
+it was inherited from a discipline meant for a different situation
+(avoiding speculative exposure) and never revisited once evidence
+arrived.
+
+Self-contained modules instead of one flat section: yes, and it's a
+small step from where the DSP already is. pitchEnvAmountSnapshot/
+pitchEnvDecaySeconds and filterEnvAmountSnapshot/filterEnvDecaySeconds
+are already independent pairs internally - only the UI flattens them
+into bassParamRows alongside Tune/Drive/Cutoff, indistinguishable from
+the instrument's base identity params. A small reusable module (label
++ Amount + optional Decay), instantiated once per phenomenon and
+visually grouped under a labelled Transient sub-section, would make
+the UI say what the DSP and this document already say: three facets
+of one system, not three more rows in a flat list.
+
+Fit with future curve-capability: this is where the module framing
+matters most. Amount and Decay are not interchangeable slots within a
+module - they have different long-term identities:
+  - Amount answers "how much of this phenomenon happens THIS note" -
+    naturally phrase-expressive, a strong future candidate to become
+    curve-capable exactly like Skank's SawMix (flat curve = section
+    value, shaped = gesture).
+  - Decay answers "how does this phenomenon unfold in time" - a
+    voicing/character choice, not something that should sweep
+    note-to-note within a bassline (that reads as inconsistent, not
+    expressive). Its natural future home is section-override
+    territory, like Drive/Cutoff/Resonance already have - not a
+    curve.
+So within a module, Amount and Decay are quietly heading toward two
+DIFFERENT mechanisms later, even though both are just fixed values
+today. A future "make it curve-capable" pass should keep this
+distinction rather than reflexively curve-ifying Decay too.
+
+One additional observation: Filter Transient's "positive only, opens
+but never closes" is currently a hardcoded assumption, not a musical
+conclusion reached by listening. If Amount's range simply allowed
+negative values (closing) as well as positive (opening), a separate
+Polarity control wouldn't be needed at all - it would fall out of
+Amount for free. Worth treating "should Amount be signed" as an open
+question at implementation time rather than assuming positive-only
+permanently. Pitch Transient's direction (downward only) is on firmer
+ground - matches the genre reference (a note settling down into pitch,
+not flicking up), not just an unexamined default.
+
+No implementation from this section without an explicit go-ahead.
+
+
+7. WHAT WE DO NOW
+-----------------------------------------------------------------------
+Two threads open, not yet reconciled:
+  (a) Experiment C's listening loop - awaiting a report on the dialed-
+      back +0.06 drive amount, then one final combined A+B+C pass.
+  (b) The module architecture correction (section 6) - analysis only,
+      awaiting a decision on whether/when to restructure Pitch and
+      Filter Transient into Amount+Decay modules before Phase 1 is
+      considered "done," or after.
+Phase 2 (Length override) can still happen alongside either, since it
+needs no listening judgement.
+
+
+8. LONG TERM
+-----------------------------------------------------------------------
+Phases 2 through 5 above, each gated on Phase 1's outcome first, not a
+fixed schedule. The "explicitly not recommended" list stays in force
+unless a specific, felt limitation later makes revisiting one of those
+items a deliberate, eyes-open decision rather than a routine addition.
+
+A note on what this project has crossed, per the person who wrote the
+original brief: earlier work here was designing FEATURES ("add a
+filter envelope"). This document is designing BEHAVIOUR ("a note
+should come alive during its first 30-100ms, then settle into an
+unwavering, powerful sustain"). Phase 1's reframe into three
+experiments under one Transient Behaviour heading is a direct
+consequence of that mindset - once Pitch Env alone couldn't be made to
+work in isolation, the fix wasn't more tuning, it was recognising it
+was never a standalone feature. This document isn't tied to any one
+specific DSP implementation - even if it turns out "life" comes mostly
+from Experiment B and Experiment A ends up almost negligible (or the
+reverse), the philosophy in section 2 still holds regardless of which
+experiment ends up doing the work.
+
+This file is a snapshot of the agreed diagnosis and roadmap as of
+2026-07-07, not a locked plan - if a listening report suggests a
+different next step than the order above, follow the report, not this
+document.

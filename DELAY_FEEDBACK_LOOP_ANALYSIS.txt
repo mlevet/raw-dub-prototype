@@ -1,0 +1,262 @@
+RAW DUB PROTOTYPE - DELAY: FEEDBACK LOOP DESIGN ANALYSIS
+=======================================================================
+Written 2026-07-07 as analysis/philosophy only. First implementation
+pass (2026-07-10, DubDelay.h/.cpp) is now built and integrated as a
+send effect on the mix bus - see section 6 for what actually shipped
+vs. what's still open. Companion to BASS_DUB_PRESSURE_ANALYSIS.txt,
+which established "life, not complexity" as Bass's standing design
+filter - this document is the equivalent standing filter for Delay.
+
+
+1. THE INSPIRATION, RESTATED
+-----------------------------------------------------------------------
+A homemade acoustic feedback loop: laptop headphone out -> piezo
+transducer -> physically close second piezo transducer -> laptop mic
+in -> software -> back to output, continuously. The delay time was
+never a designed parameter - it fell out of the system's real latency
+(mostly audio buffer round-trip, since the acoustic travel distance is
+effectively instant at that range). What made it musically interesting
+was never the echo itself - it was that the loop behaved like a
+physical circuit under strain: repeats drifted in character, gain
+wasn't a stable multiplier, the whole thing felt "slightly alive and
+slightly unstable" rather than mechanically precise.
+
+Important detail initially missing from this analysis: the two piezos
+were mounted on the articulated arms of a welding assistant (a
+positioning tool with adjustable joints), and their distance/relative
+position was actively adjusted BY HAND, continuously, during use. This
+reframes the setup - it wasn't a fixed physical rig that happened to be
+imperfect, it was a PLAYED instrument, where moving the arms swept the
+acoustic coupling strength in real time, from barely-coupled (weak,
+fast-decaying repeats) to tightly-coupled (strong, near-self-oscillating
+feedback). See 3.3 below - this changes how "feedback amount" should be
+thought about, not just how it should sound.
+
+The explicit non-goals, in the user's own words: not pristine echoes,
+not studio transparency, not feature richness. Not a modern multi-mode
+delay (no ping-pong, shimmer, reverse, diffusion). One delay line,
+feedback as the central musical element, gradual degradation, subtle
+nonlinear behaviour, the feeling of routing sound through a fragile
+physical loop.
+
+
+2. PROPOSED GUIDING PRINCIPLE
+-----------------------------------------------------------------------
+A candidate, in the same spirit as Bass's "a note should come alive
+during its first 30-100ms, then settle into an unwavering, powerful
+sustain" - offered as a starting point to refine or replace, not a
+final answer:
+
+    Each repeat should sound less like a copy and more like something
+    the signal survived.
+
+The dividing line this draws: a normal digital delay's feedback path
+asks "how many copies, how quiet, how long." This one should ask "what
+does the loop do to the signal every time it passes through" - the
+repeats aren't instances of the same thing getting quieter, they're a
+single signal being progressively changed by passing through the same
+imperfect path again and again.
+
+
+3. PHYSICAL BEHAVIOURS WORTH MODELLING
+-----------------------------------------------------------------------
+In rough order of how identity-defining each one is - i.e. how much of
+the "fragile physical loop" feeling would be lost without it.
+
+3.1 Progressive bandwidth loss, compounding per repeat
+    Piezo transducers (as both crude speaker and crude microphone),
+    the acoustic air-coupling, and consumer-grade ADC/DAC stages all
+    naturally roll off extremes - highs first and most, but some low
+    end too. Applied ONCE inside the feedback loop (not as an output
+    EQ), this compounds: repeat 1 loses a little top end, repeat 2
+    loses more on top of that, and so on, converging toward a narrow,
+    dark, midrangey thump the longer the loop runs. This is probably
+    the single most load-bearing behaviour here - it's what makes
+    later repeats feel like they came from somewhere further away, not
+    just quieter copies of the first one.
+
+3.2 Saturation accumulating through the feedback path
+    Piezo elements are notoriously nonlinear when driven with any
+    real level, and cheap mic/line stages clip and compress readily.
+    A mild nonlinearity (the project already has a working vocabulary
+    for this - see BassSynth's tanh saturation) placed INSIDE the loop,
+    once per pass, means repeats don't just get quieter and darker -
+    they get progressively grittier too. Combined with 3.1, this is
+    what makes the tail feel like it's mutating rather than fading.
+
+3.3 Feedback amount as a PLAYED control, not just a wandering one
+    Revised after learning the piezo distance was actively adjusted by
+    hand via the welding-assistant arms: this was never a passive
+    "gain happens to drift a little" situation. It was a deliberate,
+    wide-range PERFORMANCE gesture - sweeping from weak/fast-decaying
+    coupling to strong/near-self-oscillating coupling, live, as part of
+    playing the instrument. Two distinct things worth keeping separate:
+      - A SUBTLE, involuntary wander still belongs here too (physical
+        contact/position was never perfectly still even when the arms
+        weren't being deliberately moved) - small, organic, in the
+        background.
+      - But the DELIBERATE range-sweeping is the bigger idea: Feedback
+        Amount is likely this instrument's central expressive control,
+        meant to be actively ridden/swept, not set once and left. Its
+        RANGE needs to genuinely span from gentle decaying echo to
+        near-runaway squeal for this to be true to the inspiration -
+        a narrow, timid range would miss the point entirely.
+    Implication for later (not now - stays in section 4's "minimal
+    surface" discipline for a first pass): this may end up being a
+    strong candidate to become curve-capable eventually, the same way
+    Skank's SawMix is - a hand-swept gesture across a phrase is exactly
+    what that mechanism already exists for. Not proposing that yet,
+    just flagging why Feedback Amount specifically (more than any other
+    control here) might outgrow "just a knob" sooner than others would.
+
+3.4 A natural ceiling, not a hard limiter
+    Real feedback loops near the edge of oscillation can swell and
+    threaten to run away, but self-limit rather than either decaying
+    perfectly (typical clean digital delay) or blowing up catastroph-
+    ically. I believe this doesn't need to be its own separate
+    mechanism - if saturation (3.2) sits inside the loop at the right
+    point, it should naturally constrain how much energy can
+    accumulate pass over pass, giving moments of real intensity
+    without the loop ever fully escaping control. Worth verifying this
+    falls out correctly once 3.1-3.3 exist, rather than building a
+    fourth, separate safety mechanism preemptively.
+
+3.5 "Progressively more interesting, not simply louder or quieter"
+    This is the success criterion for 3.1-3.4 together, not a fifth
+    mechanism to build. Revised given 3.3's reframing: loudness and
+    character aren't independent here, and that's correct, not a flaw
+    to fix - a real coupling loop doesn't let you change one without
+    the other. The point is that sweeping Feedback Amount shouldn't
+    feel like a volume fader with some texture added on top; it should
+    feel like one control simultaneously governing how much energy
+    survives each pass AND how mutated that surviving signal is -
+    exactly like moving the piezos closer together did.
+
+
+4. EXPLICITLY NOT TO IMPLEMENT
+-----------------------------------------------------------------------
+  - Multiple taps, ping-pong, reverse, diffusion/reverb-like smearing,
+    shimmer or pitch-shifted repeats - all explicitly ruled out by the
+    user as "modern multi-mode delay," contrary to "one delay line."
+  - Literal physical modelling of acoustic wave propagation or piezo
+    resonance (convolution-based or waveguide simulation) - this is
+    the same call Bass already made against full cabinet convolution
+    modelling ("not full convolution, just a post-EQ curve"). A
+    lightweight, characterful approximation (simple filtering +
+    saturation + gain wander) fits this project's minimal-architecture
+    stance far better than an accurate physical model would.
+  - Stereo widening or spatial processing - not mentioned by the user,
+    but the project's audio path is currently mono throughout (the
+    engine copies the same signal to every output channel), and Bass's
+    own not-recommended list ruled this out for that instrument too.
+    No reason to introduce it here first.
+  - An exposed "instability amount" knob that's essentially "how
+    broken do you want the delay" - tempting, but should stay internal
+    at first, matching the same standing rule established for Bass:
+    don't expose a parameter until repeated listening shows it's
+    actually needed. Start with the minimum control surface a delay
+    needs to be musically usable at all (very likely: feedback amount,
+    mix/level - not more), and let anything beyond that earn its way
+    in the same way Pitch Envelope Amount did for Bass.
+
+
+5. OPEN QUESTIONS - NEEDS THE USER'S CALL BEFORE ANY IMPLEMENTATION
+-----------------------------------------------------------------------
+  - Delay time itself was never a designed parameter in the original
+    setup - it fell out of real system latency. Raw Dub's delay will
+    need SOME way to set repeat timing to be musically usable in a
+    sequenced context (most likely tempo/step-synced, matching how the
+    rest of the app already thinks in steps rather than raw ms) - but
+    that's a departure from the inspiration's spirit of "the time is
+    just what the loop happens to take." Worth deciding deliberately
+    whether delay time is a musical/step-synced control (a clean
+    exception to "nothing here is precisely tunable") or whether it
+    should itself carry some of the same imprecision/wander as the
+    feedback path.
+  - Where exactly the saturation and filtering sit in the loop (before
+    vs. after the delay tap, inside vs. outside the feedback path)
+    changes the character meaningfully - this needs actual listening
+    once something exists to A/B, not a decision made on paper.
+  - Whether this instrument reads a dry input signal (Skank, vocals,
+    etc. later) or needs its own trigger/test-tone path for isolated
+    voicing work, the way BassSynth had a manual Trigger button - not
+    yet decided, and probably depends on which instrument it processes
+    first.
+    RESOLVED (2026-07-10), then REVISED same day: the very first cut
+    used a global mix-bus tap (Kick+Bass+Skank, post-sum) as an explicit
+    first-pass simplification. Immediately replaced by a per-instrument
+    send system once the delay was actually being used - "which
+    instruments feed the delay" turned out to be the real musical
+    question, not a detail worth deferring. See section 6.
+
+
+6. FIRST IMPLEMENTATION (2026-07-10) - what shipped vs. what's still open
+-----------------------------------------------------------------------
+DubDelay.h/.cpp, integrated as a send effect. Signal flow exactly as
+analysed - delay line -> Tone (one-pole lowpass) -> Drive (tanh,
+BassSynth::drive's same shaping curve) -> x Feedback -> back into the
+delay - damping and saturation both live INSIDE the loop, not applied
+once to the output, so repeats compound rather than just fade.
+
+Five controls, matching the first-pass scope exactly: Time (10-1500ms,
+plain ms knob, NOT tempo-synced - question above resolved this way for
+now, not permanently), Feedback (0 - maxFeedback), Tone (200-8000Hz
+lowpass cutoff inside the loop), Drive (0-1, inside the loop), Wet
+(0-1 - Wet controls only how much of the loop's coloured output
+returns to the main mix; how much reaches the loop in the first place
+is now a per-instrument decision, see below). Plus a Bypass toggle for
+A/B comparison, same shape as AM mode's research toggle.
+
+A correction from the original analysis, made explicit during
+implementation: tanh bounds amplitude but does NOT by itself keep the
+loop musically alive - a saturating feedback loop can converge to a
+fixed, undecaying drone well before it's in any numerical danger.
+Feedback is deliberately capped well below 1.0 (maxFeedback = 0.95,
+not just "under 1.0") for this reason, not only to prevent runaway.
+The delay buffer and filter state are explicitly zeroed on New Project
+and on Open Project (DubDelay::clearBuffer()) - old audio energy must
+never linger into a freshly reset or loaded project.
+
+ROUTING REVISED same day: replaced the global mix-bus tap with a
+proper per-instrument send. Each of Kick/Bass/Skank gained its own
+DelaySend param (0-1, instrument-level, default 0 - opt-in, not
+opt-out), living on the synth itself alongside Volume. Kick, Bass, and
+Skank now each render into their own scratch buffer first
+(AudioEngine::renderInstrumentsAndDelay); the dry mix is still their
+straight sum, unchanged, but the delay's input is a SEPARATE weighted
+sum (kickOut*kickSend + bassOut*bassSend + skankOut*skankSend),
+matching DubDelay::process's new signature (separate input and output
+buffers, a true send/return rather than an in-place mix-bus tap). The
+reason: "which instruments feed the delay" is an immediate, real
+musical decision (e.g. Skank stabs into the loop, Kick/Bass dry), not
+a detail to defer behind a single global send.
+
+Deliberately still simple, per this pass's explicit scope: sends are
+instrument-level only - no per-step delay triggers, no send curves, no
+mixer page, no per-section automation. The user's own framing: "later,
+each Send can naturally become curve-capable, and maybe eventually
+per-step or per-pattern if composition asks for it. For now:
+instrument-level send first" - matches this project's general pattern
+of letting curve-capability generalize to a parameter once a real
+compositional need surfaces, not preemptively (see
+project_raw_dub_song_architecture memory).
+
+Sections 4/5's open questions not yet resolved by this pass: exact
+placement of Tone/Drive within the loop was implemented per this
+document's default recommendation (both inside, Drive before the
+Feedback multiply) but not yet A/B'd against alternatives by ear -
+still a listening question, not a settled one. Feedback's earlier
+"welding-assistant" framing (a wide-range, actively swept performance
+control) is structurally supported (Feedback's range goes right up to
+maxFeedback) but no live-sweep-specific UI (e.g. curve-capability) has
+been added - plain slider only, for now.
+
+
+7. PROCESS
+-----------------------------------------------------------------------
+Same discipline established for Bass, carried over rather than
+reinvented: one small, isolated experiment at a time, A/B against
+reference tracks (and against the loop disabled via Bypass), a
+listening report before the next step - never multiple sound-design
+changes bundled together. Next step is a first listening pass on what
+now exists, not further architecture - see section 6.
