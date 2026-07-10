@@ -115,6 +115,25 @@ void curveFromVar (const juce::var& v, PointCurve& curve)
     }
 }
 
+// Old saves (from before SawMix became a normal curve-capable param)
+// stored its curve in a dedicated "sawMixCurve" property that existed
+// on every slot, flat-by-default even when the user never touched it.
+// Migrate it into the new generic curves map only if it actually holds
+// an authored shape (isFlat() == false) - otherwise every legacy save
+// would materialize a needless flat/expanded curve row on every single
+// slot. Skipped entirely if the pattern already picked up a SawMix
+// curve the normal way (patternFromVar, called just before this, would
+// have already populated it from a "curves" property on newer saves).
+void migrateLegacySawMixCurve (const juce::var& slotVar, StepPattern& pattern)
+{
+    if (pattern.hasCurve ((int) SkankParamID::SawMix))
+        return;
+    PointCurve legacy;
+    curveFromVar (slotVar.getProperty ("sawMixCurve", juce::var()), legacy);
+    if (! legacy.isFlat())
+        pattern.getOrCreateCurve ((int) SkankParamID::SawMix, 0.5f).copyFrom (legacy);
+}
+
 // Sparse per-instrument section-override storage (see AudioEngine::
 // OverrideMap) - nested object keyed by paramId-as-string, same "absent
 // entry = default/inactive" convention patternToVar already uses for
@@ -196,8 +215,12 @@ juce::var skankBankToVar (AudioEngine& engine)
     for (auto& slot : engine.skankBank)
     {
         auto* obj = new juce::DynamicObject();
+        // SawMix's curve rides along inside "pattern" now (steps.curves,
+        // keyed by SkankParamID::SawMix), same as every other
+        // curve-capable param - no dedicated property needed any more.
+        // Loading still reads the old "sawMixCurve" property for
+        // pre-existing saves (see skankBankFromVar's migration).
         obj->setProperty ("pattern", patternToVar (slot.steps));
-        obj->setProperty ("sawMixCurve", curveToVar (slot.sawMixCurve));
 
         juce::Array<juce::var> chordArr;
         for (int i = 0; i < StepPattern::maxLength; ++i)
@@ -233,6 +256,12 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
     delayParams->setProperty ("wet",      (double) engine.delay.wet.load());
     delayParams->setProperty ("bypass",   engine.delay.bypass.load());
     root->setProperty ("delay", juce::var (delayParams));
+    // Feedback/Tone/Drive/Wet curves + Length - see AudioEngine::
+    // delayPattern's comment (a curve+Length container, not a bank,
+    // reuses the exact same StepPattern serialization every instrument
+    // pattern already gets, its unused step on/off/level/pitch data
+    // just rides along for free).
+    root->setProperty ("delayPattern", patternToVar (engine.delayPattern));
 
     auto* kickParams = new juce::DynamicObject();
     kickParams->setProperty ("tune",  (double) engine.kick.tuneHz.load());
@@ -346,6 +375,7 @@ bool ProjectIO::save (AudioEngine& engine, const juce::File& file)
         obj->setProperty ("skankOverrides", overrideMapToVar (gp.skankOverrides));
         obj->setProperty ("snareOverrides", overrideMapToVar (gp.snareOverrides));
         obj->setProperty ("hihatOverrides", overrideMapToVar (gp.hihatOverrides));
+        obj->setProperty ("delayOverrides", overrideMapToVar (gp.delayOverrides));
         globalPatternsArr.add (juce::var (obj));
     }
     root->setProperty ("globalPatterns", globalPatternsArr);
@@ -381,6 +411,9 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
     // a loaded project's delay buffer should never carry over old audio
     // energy from whatever was playing before Open was clicked
     engine.delay.clearBuffer();
+    // absent entirely = legacy save from before Delay curves existed -
+    // patternFromVar leaves activeLength/curves at their defaults
+    patternFromVar (rootVar.getProperty ("delayPattern", juce::var()), engine.delayPattern);
 
     auto kickVar = rootVar.getProperty ("kick", juce::var());
     if (kickVar.isObject())
@@ -461,7 +494,7 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
             {
                 auto slotVar = (*bankArr)[i];
                 patternFromVar (slotVar.getProperty ("pattern", juce::var()), engine.skankBank[(size_t) i].steps);
-                curveFromVar (slotVar.getProperty ("sawMixCurve", juce::var()), engine.skankBank[(size_t) i].sawMixCurve);
+                migrateLegacySawMixCurve (slotVar, engine.skankBank[(size_t) i].steps);
 
                 // absent entirely = legacy save from before per-step chord
                 // quality existed - every step defaults to major (false),
@@ -477,7 +510,7 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
         {
             // legacy single-pattern save
             patternFromVar (skankVar.getProperty ("pattern", juce::var()), engine.skankBank[0].steps);
-            curveFromVar (skankVar.getProperty ("sawMixCurve", juce::var()), engine.skankBank[0].sawMixCurve);
+            migrateLegacySawMixCurve (skankVar, engine.skankBank[0].steps);
             engine.setCurrentSkankPatternIndex (0);
         }
     }
@@ -545,6 +578,7 @@ bool ProjectIO::load (AudioEngine& engine, const juce::File& file)
             overrideMapFromVar (slotVar.getProperty ("skankOverrides", juce::var()), gp.skankOverrides);
             overrideMapFromVar (slotVar.getProperty ("snareOverrides", juce::var()), gp.snareOverrides);
             overrideMapFromVar (slotVar.getProperty ("hihatOverrides", juce::var()), gp.hihatOverrides);
+            overrideMapFromVar (slotVar.getProperty ("delayOverrides", juce::var()), gp.delayOverrides);
         }
     }
     // absent entirely = legacy save from before Global Patterns existed - leave all slots unused, nothing to migrate

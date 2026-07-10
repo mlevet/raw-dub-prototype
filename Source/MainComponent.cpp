@@ -106,7 +106,6 @@ MainComponent::MainComponent()
                         row->curveExpanded = false;
                     refreshParamSlidersFromEngine();
                     refreshStepColours();
-                    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
                     resized();
                 }
             });
@@ -139,7 +138,6 @@ MainComponent::MainComponent()
                     row->curveExpanded = false;
                 refreshParamSlidersFromEngine();
                 refreshStepColours();
-                skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
                 resized();
             }));
     };
@@ -163,8 +161,6 @@ MainComponent::MainComponent()
             refreshBassPitchViewport (true);
             refreshSkankPitchViewport (true);
             refreshStepColours();
-            skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
-            skankSawMixLaneEditor.repaint();
             resized();
         }
         refreshAllOverrideControls(); // different section, possibly different override state - also refreshes each row's curve state (see refreshOverrideControls)
@@ -607,10 +603,8 @@ MainComponent::MainComponent()
     skankClearButton.onClick = [this]
     {
         engine.skankPattern().clearAll();
-        engine.skankSawMixCurve().resetToValue (0.5f);
         refreshSkankPitchViewport (true); // nothing left to show - back to the default center
         refreshStepColours();
-        skankSawMixLaneEditor.repaint();
     };
 
     for (int s = 0; s < RawDub::numSteps; ++s)
@@ -705,11 +699,7 @@ MainComponent::MainComponent()
         auto& btn = skankLengthButtons[(size_t) i];
         btn.setButtonText (juce::String (lengthOptions[i]));
         pageContent.addAndMakeVisible (btn);
-        btn.onClick = [this, i]
-        {
-            setVoiceLength (engine.skankPattern(), lengthOptions[i], skankViewPage);
-            skankSawMixLaneEditor.setGridDivisions (lengthOptions[i]);
-        };
+        btn.onClick = [this, i] { setVoiceLength (engine.skankPattern(), lengthOptions[i], skankViewPage); };
     }
 
     for (int p = 0; p < maxPages; ++p)
@@ -740,8 +730,13 @@ MainComponent::MainComponent()
             refreshSkankPitchViewport (true);
             refreshStepColours();
             refreshPatternSharingIndicators();
-            skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
-            skankSawMixLaneEditor.repaint();
+            // curves are pattern-scoped (see StepPattern::curves) - a
+            // different Skank pattern may have entirely different curves
+            // active, so every row's toggle/editor visibility needs
+            // resyncing, not just the step grid (see bassPatternBankButtons
+            // for the same reasoning).
+            for (auto& row : skankCurveRows)
+                refreshCurveRow (row);
             resized();
         };
     }
@@ -753,9 +748,10 @@ MainComponent::MainComponent()
         engine.makeSkankPatternUnique();
         refreshSkankPitchViewport (true);
         refreshPatternSharingIndicators();
-        skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
-        skankSawMixLaneEditor.repaint();
         refreshGlobalPatternButtons();
+        for (auto& row : skankCurveRows)
+            refreshCurveRow (row);
+        resized();
     };
 
     pageContent.addAndMakeVisible (skankMajorButton);
@@ -775,33 +771,10 @@ MainComponent::MainComponent()
 
         // currentInstrumentTab 2 = Skank, see switchInstrumentTab.
         setupCurveableParam (skankCurveRows[0], "Tune",  engine.skank.tuneHz,  200.0, 800.0, 1.0,  (int) SkankParamID::Tune,  2, skankPattern, skankOverrides);
-
-        // SawMix: NOT a CurveableParamRow - it's already always-a-curve
-        // via its own separate mechanism (skankSawMixLaneEditor below),
-        // never a flat value with an optional curve. The slider is "set
-        // a constant," the curve is "compose evolution" - never two
-        // independent ways of controlling the same thing. Moving the
-        // slider collapses the curve back to a flat line at the
-        // slider's value.
-        pageContent.addAndMakeVisible (skankSawMixRow.label);
-        skankSawMixRow.label.setText ("SawMix", juce::dontSendNotification);
-        pageContent.addAndMakeVisible (skankSawMixRow.slider);
-        skankSawMixRow.slider.setSliderStyle (juce::Slider::LinearHorizontal);
-        skankSawMixRow.slider.setScrollWheelEnabled (false);
-        skankSawMixRow.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
-        skankSawMixRow.slider.setRange (0.0, 1.0, 0.01);
-        skankSawMixRow.slider.setValue ((double) engine.skank.sawMix.load(), juce::dontSendNotification);
-        skankSawMixRow.slider.onValueChange = [this]
-        {
-            float v = (float) skankSawMixRow.slider.getValue();
-            engine.skank.sawMix.store (v);
-            engine.skankSawMixCurve().resetToValue (v);
-            skankSawMixLaneEditor.repaint();
-        };
-
         setupCurveableParam (skankCurveRows[1], "Decay", engine.skank.decayMs, 30.0, 500.0, 1.0,  (int) SkankParamID::Decay, 2, skankPattern, skankOverrides);
         setupCurveableParam (skankCurveRows[2], "Drive", engine.skank.drive,   0.0,  1.0,   0.01, (int) SkankParamID::Drive, 2, skankPattern, skankOverrides);
         setupCurveableParam (skankCurveRows[3], "Delay Send", engine.skank.delaySend, 0.0, 1.0, 0.01, (int) SkankParamID::DelaySend, 2, skankPattern, skankOverrides);
+        setupCurveableParam (skankCurveRows[4], "SawMix", engine.skank.sawMix, 0.0, 1.0, 0.01, (int) SkankParamID::SawMix, 2, skankPattern, skankOverrides);
 
         // Volume - continuously-read mixing control, plain row, see
         // skankPlainRows' comment in MainComponent.h.
@@ -827,17 +800,6 @@ MainComponent::MainComponent()
             row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
         }
     }
-
-    pageContent.addAndMakeVisible (skankSawMixLaneLabel);
-    pageContent.addAndMakeVisible (skankSawMixLaneEditor);
-    skankSawMixLaneEditor.setGridDivisions (engine.skankPattern().getActiveLength());
-    skankSawMixLaneEditor.getPointCount = [this] { return engine.skankSawMixCurve().getPointCount(); };
-    skankSawMixLaneEditor.getPointPosition = [this] (int i) { return engine.skankSawMixCurve().getPointPosition (i); };
-    skankSawMixLaneEditor.getPointValue = [this] (int i) { return engine.skankSawMixCurve().getPointValue (i); };
-    skankSawMixLaneEditor.onPointValueChanged = [this] (int i, float v) { engine.skankSawMixCurve().setPointValue (i, v); };
-    skankSawMixLaneEditor.onPointPositionChanged = [this] (int i, float p) { engine.skankSawMixCurve().setPointPosition (i, p); };
-    skankSawMixLaneEditor.onAddPoint = [this] (float p, float v) { return engine.skankSawMixCurve().insertPoint (p, v); };
-    skankSawMixLaneEditor.onRemovePoint = [this] (int i) { engine.skankSawMixCurve().removePoint (i); };
 
     // --- Snare ---
     pageContent.addAndMakeVisible (snareTriggerButton);
@@ -1069,29 +1031,49 @@ MainComponent::MainComponent()
     pageContent.addAndMakeVisible (delayTitleLabel);
     delayTitleLabel.setFont (juce::Font (20.0f, juce::Font::bold));
 
+    // Length - delayPattern is a curve+Length container, not a
+    // sequenced pattern (see AudioEngine::delayPattern's comment) -
+    // same 4/16/32/64 options every instrument's Length row already
+    // offers, no separate paging UI since there's no step grid to page
+    // through.
+    pageContent.addAndMakeVisible (delayLengthLabel);
+    for (int i = 0; i < 4; ++i)
     {
-        ParamSpec delaySpecs[5] = {
-            { "Time",     &engine.delay.timeMs,   10.0,  1500.0, 5.0  },
-            { "Feedback", &engine.delay.feedback, 0.0,   (double) RawDub::DubDelay::maxFeedback, 0.01 },
-            { "Tone",     &engine.delay.toneHz,   200.0, 8000.0, 10.0 },
-            { "Drive",    &engine.delay.drive,    0.0,   1.0,    0.01 },
-            { "Wet",      &engine.delay.wet,      0.0,   1.0,    0.01 },
-        };
-        for (int i = 0; i < 5; ++i)
+        auto& btn = delayLengthButtons[(size_t) i];
+        btn.setButtonText (juce::String (lengthOptions[i]));
+        pageContent.addAndMakeVisible (btn);
+        btn.onClick = [this, i]
         {
-            auto& row = delayParamRows[(size_t) i];
-            pageContent.addAndMakeVisible (row.label);
-            row.label.setText (delaySpecs[i].name, juce::dontSendNotification);
-            pageContent.addAndMakeVisible (row.slider);
-            row.slider.setSliderStyle (juce::Slider::LinearHorizontal);
-            row.slider.setScrollWheelEnabled (false); // page now scrolls under the mouse - a slider must never eat that wheel event
-            row.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
-            row.slider.setRange (delaySpecs[i].minV, delaySpecs[i].maxV, delaySpecs[i].step);
-            row.slider.setValue ((double) delaySpecs[i].param->load(), juce::dontSendNotification);
-            auto* param = delaySpecs[i].param;
-            auto* slider = &row.slider;
-            row.slider.onValueChange = [param, slider] { param->store ((float) slider->getValue()); };
-        }
+            engine.delayPattern.setActiveLength (lengthOptions[i]);
+            refreshStepColours();
+            for (auto& row : delayCurveRows)
+                refreshCurveRow (row);
+            resized();
+        };
+    }
+
+    // Time stays a plain slider - see ParamID.h's DelayParamID comment
+    // on why it isn't curve/override-capable yet.
+    pageContent.addAndMakeVisible (delayTimeRow.label);
+    delayTimeRow.label.setText ("Time", juce::dontSendNotification);
+    pageContent.addAndMakeVisible (delayTimeRow.slider);
+    delayTimeRow.slider.setSliderStyle (juce::Slider::LinearHorizontal);
+    delayTimeRow.slider.setScrollWheelEnabled (false);
+    delayTimeRow.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 22);
+    delayTimeRow.slider.setRange (10.0, 1500.0, 5.0);
+    delayTimeRow.slider.setValue ((double) engine.delay.timeMs.load(), juce::dontSendNotification);
+    delayTimeRow.slider.onValueChange = [this] { engine.delay.timeMs.store ((float) delayTimeRow.slider.getValue()); };
+
+    {
+        using RawDub::DelayParamID;
+        auto delayPattern = [this]() -> RawDub::StepPattern& { return engine.delayPattern; };
+        auto delayOverrides = [this]() -> RawDub::AudioEngine::OverrideMap& { return engine.globalPatterns[(size_t) engine.getCurrentGlobalPatternSlot()].delayOverrides; };
+
+        // currentInstrumentTab 5 = Delay, see switchInstrumentTab.
+        setupCurveableParam (delayCurveRows[0], "Feedback", engine.delay.feedback, 0.0, (double) RawDub::DubDelay::maxFeedback, 0.01, (int) DelayParamID::Feedback, 5, delayPattern, delayOverrides);
+        setupCurveableParam (delayCurveRows[1], "Tone",     engine.delay.toneHz,   200.0, 8000.0, 10.0, (int) DelayParamID::Tone,     5, delayPattern, delayOverrides);
+        setupCurveableParam (delayCurveRows[2], "Drive",    engine.delay.drive,    0.0,   1.0,    0.01, (int) DelayParamID::Drive,    5, delayPattern, delayOverrides);
+        setupCurveableParam (delayCurveRows[3], "Wet",      engine.delay.wet,      0.0,   1.0,    0.01, (int) DelayParamID::Wet,      5, delayPattern, delayOverrides);
     }
 
     // A/B comparison toggle, same black/white language as the rest of
@@ -1141,8 +1123,7 @@ MainComponent::MainComponent()
     for (auto& btn : bassAmRatioButtons) bassComponents.push_back (&btn);
 
     skankComponents = { &skankTriggerButton, &skankClearButton, &skankTitleLabel, &skankMajorButton, &skankMinorButton,
-                         &skankLengthLabel, &skankPatternBankLabel, &skankSawMixLaneLabel, &skankSawMixLaneEditor,
-                         &skankSawMixRow.label, &skankSawMixRow.slider,
+                         &skankLengthLabel, &skankPatternBankLabel,
                          &skankSharedLabel, &skankMakeUniqueButton, &skankPitchRangeLabel };
     for (auto& btn : skankStepButtons) skankComponents.push_back (&btn);
     for (auto& btn : skankChordQualityButtons) skankComponents.push_back (&btn);
@@ -1185,8 +1166,14 @@ MainComponent::MainComponent()
     for (auto& btn : hihatPageButtons) hihatComponents.push_back (&btn);
     for (auto& btn : hihatPatternBankButtons) hihatComponents.push_back (&btn);
 
-    delayComponents = { &delayTitleLabel, &delayBypassButton };
-    for (auto& row : delayParamRows) { delayComponents.push_back (&row.label); delayComponents.push_back (&row.slider); }
+    delayComponents = { &delayTitleLabel, &delayBypassButton, &delayLengthLabel, &delayTimeRow.label, &delayTimeRow.slider };
+    for (auto& btn : delayLengthButtons) delayComponents.push_back (&btn);
+    for (auto& row : delayCurveRows)
+    {
+        delayComponents.push_back (&row.label);
+        delayComponents.push_back (&row.slider);
+        delayComponents.push_back (&row.curveEditor);
+    }
 
     switchInstrumentTab (0);
 
@@ -1663,17 +1650,10 @@ int MainComponent::layoutSkankSection (juce::Rectangle<int> area)
     };
 
     layoutCurveRow (skankCurveRows[0]); // Tune
-
-    {
-        auto rowArea = area.removeFromTop (36);
-        skankSawMixRow.label.setBounds (rowArea.removeFromLeft (90));
-        skankSawMixRow.slider.setBounds (rowArea);
-        area.removeFromTop (8);
-    }
-
     layoutCurveRow (skankCurveRows[1]); // Decay
     layoutCurveRow (skankCurveRows[2]); // Drive
     layoutCurveRow (skankCurveRows[3]); // Delay Send
+    layoutCurveRow (skankCurveRows[4]); // SawMix
 
     for (auto& row : skankPlainRows)
     {
@@ -1682,11 +1662,6 @@ int MainComponent::layoutSkankSection (juce::Rectangle<int> area)
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
     }
-
-    area.removeFromTop (8);
-    skankSawMixLaneLabel.setBounds (area.removeFromTop (20));
-    area.removeFromTop (4);
-    skankSawMixLaneEditor.setBounds (area.removeFromTop (70));
 
     return area.getY();
 }
@@ -1843,15 +1818,40 @@ int MainComponent::layoutDelaySection (juce::Rectangle<int> area)
     delayTitleLabel.setBounds (delayHeader.removeFromLeft (150));
     delayBypassButton.setBounds (delayHeader.removeFromLeft (90));
 
+    area.removeFromTop (8);
+
+    auto delayLengthRow = area.removeFromTop (28);
+    delayLengthLabel.setBounds (delayLengthRow.removeFromLeft (60));
+    for (auto& btn : delayLengthButtons)
+    {
+        btn.setBounds (delayLengthRow.removeFromLeft (44));
+        delayLengthRow.removeFromLeft (6);
+    }
+
     area.removeFromTop (16);
 
-    for (auto& row : delayParamRows)
+    {
+        auto rowArea = area.removeFromTop (36);
+        delayTimeRow.label.setBounds (rowArea.removeFromLeft (90));
+        delayTimeRow.slider.setBounds (rowArea);
+        area.removeFromTop (8);
+    }
+
+    auto layoutCurveRow = [&] (CurveableParamRow& row)
     {
         auto rowArea = area.removeFromTop (36);
         row.label.setBounds (rowArea.removeFromLeft (90));
         row.slider.setBounds (rowArea);
         area.removeFromTop (8);
-    }
+
+        if (activeCurveExists (row) && row.curveExpanded)
+        {
+            row.curveEditor.setBounds (area.removeFromTop (70));
+            area.removeFromTop (6);
+        }
+    };
+    for (auto& row : delayCurveRows)
+        layoutCurveRow (row);
 
     return area.getY();
 }
@@ -1865,15 +1865,17 @@ void MainComponent::timerCallback()
     int skankStep = engine.isPlaying() ? engine.getCurrentSkankStep() : -1;
     int snareStep = engine.isPlaying() ? engine.getCurrentSnareStep() : -1;
     int hihatStep = engine.isPlaying() ? engine.getCurrentHiHatStep() : -1;
+    int delayStep = engine.isPlaying() ? engine.getCurrentDelayStep() : -1;
 
     if (kickStep != kickPlayheadStep || bassStep != bassPlayheadStep || skankStep != skankPlayheadStep
-        || snareStep != snarePlayheadStep || hihatStep != hihatPlayheadStep)
+        || snareStep != snarePlayheadStep || hihatStep != hihatPlayheadStep || delayStep != delayPlayheadStep)
     {
         kickPlayheadStep = kickStep;
         bassPlayheadStep = bassStep;
         skankPlayheadStep = skankStep;
         snarePlayheadStep = snareStep;
         hihatPlayheadStep = hihatStep;
+        delayPlayheadStep = delayStep;
         refreshStepColours();
     }
 
@@ -1987,7 +1989,6 @@ void MainComponent::refreshStepColours()
         hihatBtn.setPlayhead (hihatIndex == hihatPlayheadStep);
     }
 
-    skankSawMixLaneEditor.setPlayheadStep (skankPlayheadStep);
     for (auto& row : kickCurveRows)
         row.curveEditor.setPlayheadStep (kickPlayheadStep);
     for (auto& row : bassCurveRows)
@@ -1998,6 +1999,8 @@ void MainComponent::refreshStepColours()
         row.curveEditor.setPlayheadStep (snarePlayheadStep);
     for (auto& row : hihatCurveRows)
         row.curveEditor.setPlayheadStep (hihatPlayheadStep);
+    for (auto& row : delayCurveRows)
+        row.curveEditor.setPlayheadStep (delayPlayheadStep);
 
     // page buttons: black = the page you're viewing/editing, grey = the
     // page currently playing (if different) - same black/white/grey
@@ -2045,6 +2048,7 @@ void MainComponent::refreshStepColours()
     refreshLengthButtons (skankLengthButtons, engine.skankPattern().getActiveLength());
     refreshLengthButtons (snareLengthButtons, engine.snarePattern().getActiveLength());
     refreshLengthButtons (hihatLengthButtons, engine.hihatPattern().getActiveLength());
+    refreshLengthButtons (delayLengthButtons, engine.delayPattern.getActiveLength());
 
     // pattern bank buttons: black = the pattern slot currently selected
     // for that instrument - same convention as Length/page buttons
@@ -2111,23 +2115,17 @@ void MainComponent::refreshParamSlidersFromEngine()
     bassAmRatioButtons[1].setToggleState (ratio == 2.0f, juce::dontSendNotification);
     bassAmRatioButtons[2].setToggleState (ratio == 3.0f, juce::dontSendNotification);
 
-    skankSawMixRow.slider.setValue ((double) engine.skank.sawMix.load(), juce::dontSendNotification);
     skankPlainRows[0].slider.setValue ((double) engine.skank.volume.load(), juce::dontSendNotification);
     refreshPatternSharingIndicators();
     bool isMinor = engine.skank.minorChord.load();
     skankMajorButton.setToggleState (! isMinor, juce::dontSendNotification);
     skankMinorButton.setToggleState (isMinor, juce::dontSendNotification);
-    skankSawMixLaneEditor.repaint();
 
     snarePlainRows[0].slider.setValue ((double) engine.snare.volume.load(), juce::dontSendNotification);
 
     hihatPlainRows[0].slider.setValue ((double) engine.hihat.volume.load(), juce::dontSendNotification);
 
-    delayParamRows[0].slider.setValue ((double) engine.delay.timeMs.load(),   juce::dontSendNotification);
-    delayParamRows[1].slider.setValue ((double) engine.delay.feedback.load(), juce::dontSendNotification);
-    delayParamRows[2].slider.setValue ((double) engine.delay.toneHz.load(),   juce::dontSendNotification);
-    delayParamRows[3].slider.setValue ((double) engine.delay.drive.load(),    juce::dontSendNotification);
-    delayParamRows[4].slider.setValue ((double) engine.delay.wet.load(),      juce::dontSendNotification);
+    delayTimeRow.slider.setValue ((double) engine.delay.timeMs.load(), juce::dontSendNotification);
     bool bypassed = engine.delay.bypass.load();
     delayBypassButton.setColour (juce::TextButton::buttonColourId, bypassed ? juce::Colours::black : juce::Colours::white);
     delayBypassButton.setColour (juce::TextButton::textColourOffId, bypassed ? juce::Colours::white : juce::Colours::black);
@@ -2411,8 +2409,7 @@ bool MainComponent::curveAvailableHere (const CurveableParamRow& row) const
 // slider's numeric value - that stays whoever last set it
 // (refreshParamSlidersFromEngine / refreshOverrideControls), since
 // the slider always represents "the last explicit value," independent
-// of whatever the curve is doing during playback (same as SawMix
-// already does for Skank).
+// of whatever the curve is doing during playback.
 void MainComponent::refreshCurveRow (CurveableParamRow& row)
 {
     // Label uses the broader "available here" check (includes a dormant

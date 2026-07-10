@@ -171,7 +171,6 @@ void AudioEngine::resetToDefaults()
     {
         s.steps.clearAll();
         s.steps.setActiveLength (StepPattern::maxLength);
-        s.sawMixCurve.resetToValue (0.5f);
     }
     for (auto& p : snareBank)
     {
@@ -183,6 +182,8 @@ void AudioEngine::resetToDefaults()
         p.clearAll();
         p.setActiveLength (numSteps);
     }
+    delayPattern.clearAll();
+    delayPattern.setActiveLength (numSteps);
 
     currentKickIndex.store (0);
     currentBassIndex.store (0);
@@ -276,8 +277,10 @@ void AudioEngine::advanceStep()
         // per-step chord quality - always explicit for sequenced notes,
         // never falls back to the global knob (see SkankPatternSlot::chordIsMinor)
         int minorOverride = skankPatternSlot().getChordIsMinor (skankStep) ? 1 : 0;
+        float sawMix = resolve (skankPattern(), SkankParamID::SawMix, fraction, 0.0f, 1.0f,
+                                 AudioEngine::findOverride (gp.skankOverrides, (int) SkankParamID::SawMix));
         skank.triggerChord (skankPattern().getSemitoneOffset (skankStep), stepLevelGain (skankPattern().getLevel (skankStep)),
-                             skankSawMixCurve().sample (fraction), skankOverrides, minorOverride);
+                             sawMix, skankOverrides, minorOverride);
     }
 }
 
@@ -310,6 +313,30 @@ void AudioEngine::resolveDelaySends()
                                            findOverride (gp.snareOverrides, (int) SnareParamID::DelaySend), snare.delaySend.load()));
     resolvedHihatSend.store (resolveSend (hihatPattern(), (int) HiHatParamID::DelaySend, hihatPattern().getActiveLength(),
                                            findOverride (gp.hihatOverrides, (int) HiHatParamID::DelaySend), hihat.delaySend.load()));
+}
+
+// Feedback/Tone/Drive/Wet, resolved fresh every render block against
+// delayPattern's own Length, sampled by the GLOBAL step counter (Delay
+// has no step position of its own - see delayPattern's comment in
+// AudioEngine.h). Time is deliberately absent - see ParamID.h's
+// DelayParamID comment.
+void AudioEngine::resolveDelayParams (float& feedbackOut, float& toneOut, float& driveOut, float& wetOut)
+{
+    const auto& gp = globalPatterns[(size_t) currentGlobalPatternSlot.load()];
+    int len = delayPattern.getActiveLength();
+    int step = globalStepAtomic.load();
+    float fraction = len > 1 ? (float) (step % len) / (float) (len - 1) : 0.0f;
+
+    auto resolve1 = [&] (DelayParamID id, float lo, float hi, const ParamOverride* ov, float baseValue) -> float
+    {
+        float v = resolveParam (delayPattern, (int) id, fraction, lo, hi, ov);
+        return v >= 0.0f ? v : baseValue;
+    };
+
+    feedbackOut = resolve1 (DelayParamID::Feedback, 0.0f, DubDelay::maxFeedback, findOverride (gp.delayOverrides, (int) DelayParamID::Feedback), delay.feedback.load());
+    toneOut     = resolve1 (DelayParamID::Tone,     200.0f, 8000.0f,             findOverride (gp.delayOverrides, (int) DelayParamID::Tone),     delay.toneHz.load());
+    driveOut    = resolve1 (DelayParamID::Drive,    0.0f,   1.0f,                findOverride (gp.delayOverrides, (int) DelayParamID::Drive),    delay.drive.load());
+    wetOut      = resolve1 (DelayParamID::Wet,      0.0f,   1.0f,                findOverride (gp.delayOverrides, (int) DelayParamID::Wet),      delay.wet.load());
 }
 
 void AudioEngine::renderInstrumentsAndDelay (float* out, int numSamples)
@@ -366,7 +393,9 @@ void AudioEngine::renderInstrumentsAndDelay (float* out, int numSamples)
                                  + hihatScratch[(size_t) i] * hihatSend;
     }
 
-    delay.process (out, sendScratch.data(), numSamples);
+    float delayFeedback, delayTone, delayDrive, delayWet;
+    resolveDelayParams (delayFeedback, delayTone, delayDrive, delayWet);
+    delay.process (out, sendScratch.data(), numSamples, delayFeedback, delayTone, delayDrive, delayWet);
 }
 
 void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamples)
@@ -416,7 +445,9 @@ void AudioEngine::renderNextBlock (juce::AudioBuffer<float>& buffer, int numSamp
     if (manualSkankTriggerRequested.exchange (false))
     {
         auto skankOverrides = resolveSkankVoicingOverrides (skankPattern(), manualGp, 0.0f);
-        skank.triggerChord (0, stepLevelGain (StepLevel::Normal), -1.0f, skankOverrides);
+        float sawMix = resolve (skankPattern(), SkankParamID::SawMix, 0.0f, 0.0f, 1.0f,
+                                 AudioEngine::findOverride (manualGp.skankOverrides, (int) SkankParamID::SawMix));
+        skank.triggerChord (0, stepLevelGain (StepLevel::Normal), sawMix, skankOverrides);
     }
 
     if (manualSnareTriggerRequested.exchange (false))

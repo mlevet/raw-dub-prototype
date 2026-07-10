@@ -431,11 +431,7 @@ private:
     // are actually on. Click cycles Major/Minor for that step.
     std::array<juce::TextButton, RawDub::numSteps> skankChordQualityButtons;
     void layoutSkankChordQualityLane (juce::Rectangle<int> laneRow);
-    std::array<CurveableParamRow, 4> skankCurveRows; // Tune, Decay, Drive, Delay Send
-    // SawMix is its own always-on-curve mechanism (see skankSawMixLaneEditor
-    // below), never a flat CurveableParamRow - kept as a plain slider,
-    // same as before this system existed for Skank's other params.
-    ParamRow skankSawMixRow;
+    std::array<CurveableParamRow, 5> skankCurveRows; // Tune, Decay, Drive, Delay Send, SawMix
     // Volume - see bassPlainRows' comment, same reasoning.
     std::array<ParamRow, 1> skankPlainRows;
     juce::Label skankLengthLabel { {}, "Length" };
@@ -451,16 +447,6 @@ private:
     juce::Label skankSharedLabel;
     juce::TextButton skankMakeUniqueButton { "Make Unique" };
     void refreshPatternSharingIndicators();
-
-    // sparse draggable-point SawMix curve - see CurveLaneEditor.h and
-    // PointCurve (lives in the current Skank pattern slot, via
-    // AudioEngine::skankSawMixCurve() - not in SkankSynth, see
-    // project_raw_dub_song_architecture memory). Deliberately scoped to
-    // SawMix only, no generic modulation routing. Moving the SawMix
-    // slider flattens the curve to the slider's value (slider = static
-    // state, curve = animated state).
-    juce::Label skankSawMixLaneLabel { {}, "SawMix Curve" };
-    RawDub::CurveLaneEditor skankSawMixLaneEditor;
 
     // Snare - noise + a small tonal body, one shared filter/envelope, see
     // SnareSynth.h. Same pattern-bank/paging mechanism as Kick - no
@@ -506,13 +492,19 @@ private:
     juce::TextButton hihatMakeUniqueButton { "Make Unique" };
 
     // Delay - a send effect on the whole mix, not a sequenced instrument
-    // (see DubDelay.h) - no step grid, no pattern bank, just five plain
-    // sliders and a bypass toggle. Plain ParamRow, not CurveableParamRow -
-    // curves/section-overrides are pattern-scoped concepts that don't
-    // apply to a mix-bus effect.
+    // (see DubDelay.h) - no step grid, no pattern bank (see
+    // AudioEngine::delayPattern's comment: a single curve+Length
+    // container, not a bank of saved patterns). Feedback/Tone/Drive/Wet
+    // are curve+override-capable, sampled by the GLOBAL step counter
+    // over this Length (see ParamID.h's DelayParamID); Time stays a
+    // plain slider (see its own comment on why).
     juce::Label delayTitleLabel { {}, "Delay" };
-    std::array<ParamRow, 5> delayParamRows; // Time, Feedback, Tone, Drive, Wet
+    ParamRow delayTimeRow;
+    std::array<CurveableParamRow, 4> delayCurveRows; // Feedback, Tone, Drive, Wet
     juce::TextButton delayBypassButton { "Bypass" };
+    juce::Label delayLengthLabel { {}, "Length" };
+    std::array<juce::TextButton, 4> delayLengthButtons;
+    int delayPlayheadStep = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

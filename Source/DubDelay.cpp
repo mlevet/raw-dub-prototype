@@ -34,20 +34,21 @@ void DubDelay::clearBuffer()
     toneState = 0.0;
 }
 
-void DubDelay::process (float* mixOut, const float* sendInput, int numSamples)
+void DubDelay::process (float* mixOut, const float* sendInput, int numSamples,
+                         float feedbackAmt, float toneCutoffHz, float driveAmt, float wetAmt)
 {
     if (buffer.empty() || bypass.load())
         return;
 
-    // read once per block, not per sample - matches every other
-    // instrument's snapshot convention (BassSynth::renderAdd etc.)
+    // Time stays a raw per-block knob read (not curve/override-resolved
+    // - see class header). The other four arrive already resolved.
     double time = juce::jlimit (10.0, maxTimeMs, (double) timeMs.load());
     int delaySamples = juce::jlimit (1, (int) buffer.size() - 1, (int) (time / 1000.0 * sampleRate));
-    double fb = juce::jlimit (0.0, (double) maxFeedback, (double) feedback.load());
-    double toneCutoff = juce::jlimit (200.0, sampleRate * 0.45, (double) toneHz.load());
+    double fb = juce::jlimit (0.0, (double) maxFeedback, (double) feedbackAmt);
+    double toneCutoff = juce::jlimit (200.0, sampleRate * 0.45, (double) toneCutoffHz);
     double toneCoeff = 1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * toneCutoff / sampleRate);
-    double driveAmt = juce::jlimit (0.0, 1.0, (double) drive.load());
-    double wetAmt = juce::jlimit (0.0, 1.0, (double) wet.load());
+    double drv = juce::jlimit (0.0, 1.0, (double) driveAmt);
+    double wetLevel = juce::jlimit (0.0, 1.0, (double) wetAmt);
     int bufferSize = (int) buffer.size();
 
     for (int i = 0; i < numSamples; ++i)
@@ -69,16 +70,16 @@ void DubDelay::process (float* mixOut, const float* sendInput, int numSamples)
         // that alone isn't treated as sufficient (Feedback is capped
         // separately, well below 1.0).
         double driven = toneState;
-        if (driveAmt > 0.0001)
+        if (drv > 0.0001)
         {
-            double k = 1.0 + driveAmt * 12.0;
+            double k = 1.0 + drv * 12.0;
             driven = std::tanh (toneState * k) / std::tanh (k);
         }
 
         double feedbackSignal = driven * fb;
         buffer[(size_t) writeIndex] = (float) (input + feedbackSignal);
 
-        mixOut[i] += (float) (driven * wetAmt);
+        mixOut[i] += (float) (driven * wetLevel);
 
         writeIndex = (writeIndex + 1 == bufferSize) ? 0 : writeIndex + 1;
     }

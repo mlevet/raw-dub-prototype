@@ -8,21 +8,20 @@ namespace RawDub
 {
 // One slot in Skank's instrument pattern bank: the step data (on/off,
 // pitch, Ghost/Normal/Accent, length - same as every instrument) plus
-// the SawMix curve and per-step chord quality, which are pattern-scoped
-// musical material, not synth state (see
-// project_raw_dub_song_architecture memory). Kick and Bass don't need
-// this wrapper yet since they have neither - their banks are just plain
-// StepPattern.
+// per-step chord quality, which is pattern-scoped musical material, not
+// synth state (see project_raw_dub_song_architecture memory). Kick and
+// Bass don't need this wrapper yet since they don't have per-step
+// chord quality - their banks are just plain StepPattern.
 //
 // chordIsMinor is Skank-specific (unlike on/off/pitch/level, which
 // StepPattern gives every instrument uniformly) - Major/Minor isn't
 // something Kick or Bass could ever meaningfully have, so it lives here
-// rather than in StepPattern itself, same reasoning as sawMixCurve.
-// Lets a pattern alternate major/minor per step (e.g. same root,
-// major/minor/major/minor) without manual performance - the global
-// minorChord knob on SkankSynth remains only the default a newly
-// activated step is seeded with, and what an unsequenced manual Trigger
-// hit uses (see triggerChord's minorOverride).
+// rather than in StepPattern itself. Lets a pattern alternate
+// major/minor per step (e.g. same root, major/minor/major/minor)
+// without manual performance - the global minorChord knob on
+// SkankSynth remains only the default a newly activated step is seeded
+// with, and what an unsequenced manual Trigger hit uses (see
+// triggerChord's minorOverride).
 struct SkankPatternSlot
 {
     explicit SkankPatternSlot (int initialActiveLength)
@@ -31,6 +30,11 @@ struct SkankPatternSlot
     }
 
     StepPattern steps;
+    // SawMix's curve now lives in steps.curves (keyed by SkankParamID::
+    // SawMix) like every other curve-capable param. This field is kept
+    // ONLY so ProjectIO::load can migrate pre-existing saves that still
+    // have the old "sawMixCurve" JSON property into the new generic
+    // curves map - nothing else reads or writes it.
     PointCurve sawMixCurve;
     std::vector<std::atomic<bool>> chordIsMinor;
 
@@ -45,7 +49,6 @@ struct SkankPatternSlot
     void copyFrom (const SkankPatternSlot& other)
     {
         steps.copyFrom (other.steps);
-        sawMixCurve.copyFrom (other.sawMixCurve);
         for (size_t i = 0; i < chordIsMinor.size(); ++i)
             chordIsMinor[i].store (other.chordIsMinor[i].load (std::memory_order_relaxed), std::memory_order_relaxed);
     }

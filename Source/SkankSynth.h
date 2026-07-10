@@ -7,11 +7,11 @@ namespace RawDub
 {
 // -1 (default) on any field means "use the matching knob" - same
 // sentinel convention as the other instruments' voicing overrides.
-// SawMix is deliberately absent - it's already always-a-curve via its
-// own separate mechanism (sawMixOverride below / SkankPatternSlot::
-// sawMixCurve), never a flat value, so it was never a candidate for
-// this system. Chord quality (minor/major) is discrete, not continuous,
-// so it stays its own separate minorOverride param too.
+// SawMix is deliberately absent - it's resolved through the generic
+// curve/override system (SkankParamID::SawMix) and passed in via
+// triggerChord's own sawMixOverride parameter instead, so it was never
+// a candidate for this struct. Chord quality (minor/major) is discrete,
+// not continuous, so it stays its own separate minorOverride param too.
 struct SkankVoicingOverrides
 {
     float tuneHz = -1.0f;
@@ -35,8 +35,8 @@ public:
     // chord shape/voicing, which stays out of scope for now.
     // sawMixOverride: -1 (default) means "use the sawMix knob" (manual
     // Trigger / unsequenced use); 0-1 means "use this instead for this
-    // hit" - how the sequencer feeds in a per-step value from the shape
-    // lane, see sawMixLane below.
+    // hit" - how the sequencer feeds in a value resolved from the
+    // pattern's SawMix curve/override (see AudioEngine::advanceStep).
     // overrides: Tune/Decay/Drive section-level voicing override, same
     // -1 sentinel convention (see SkankVoicingOverrides and BassSynth's
     // BassVoicingOverrides).
@@ -63,12 +63,12 @@ public:
     // instruments feed the loop, so nothing is routed there unopted-in.
     std::atomic<float> delaySend { 0.0f };
 
-    // The SawMix curve (points, not one-value-per-step) used to live
-    // here as sawMixCurve* members. Per project_raw_dub_song_architecture:
-    // a curve is musical material, not synthesis state, so it now lives
-    // in the instrument PATTERN (see SkankPatternSlot) instead - this
-    // synth only ever receives the already-evaluated value via
-    // triggerChord's sawMixOverride, exactly as before.
+    // The SawMix curve (points, not one-value-per-step) lives in the
+    // instrument PATTERN (StepPattern::curves, keyed by SkankParamID::
+    // SawMix), same as every other curve-capable param - a curve is
+    // musical material, not synthesis state. This synth only ever
+    // receives the already-resolved value via triggerChord's
+    // sawMixOverride.
 
 private:
     struct Voice

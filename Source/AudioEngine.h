@@ -6,6 +6,7 @@
 #include "SnareSynth.h"
 #include "HiHatSynth.h"
 #include "DubDelay.h"
+#include "ParamID.h"
 #include "StepPattern.h"
 #include "SkankPatternSlot.h"
 #include <atomic>
@@ -21,9 +22,9 @@ namespace RawDub
 // selected for live editing/playback per instrument. This is the
 // foundational layer Global Patterns and Song mode will be built on
 // top of later - neither exists yet. The musical material (steps,
-// pitch, level, length, and for Skank the SawMix curve) lives in these
-// banks, never inside the synth objects, which only ever hold
-// synthesis parameters.
+// pitch, level, length, and any per-param curves - see StepPattern::
+// curves) lives in these banks, never inside the synth objects, which
+// only ever hold synthesis parameters.
 class AudioEngine
 {
 public:
@@ -61,6 +62,10 @@ public:
     int getCurrentSkankStep() const { return globalStepAtomic.load() % skankPattern().getActiveLength(); }
     int getCurrentSnareStep() const { return globalStepAtomic.load() % snarePattern().getActiveLength(); }
     int getCurrentHiHatStep() const { return globalStepAtomic.load() % hihatPattern().getActiveLength(); }
+    // Delay isn't triggered like an instrument, but delayPattern still
+    // has its own Length and position within it, driven by the same
+    // global step counter - see delayPattern's comment.
+    int getCurrentDelayStep() const { return globalStepAtomic.load() % delayPattern.getActiveLength(); }
 
     KickSynth kick;
     BassSynth bass;
@@ -70,6 +75,19 @@ public:
     // Send effect, not a per-instrument voice - see DubDelay.h. Applies
     // to the whole mix bus, not sequenced/triggered like the three above.
     DubDelay delay;
+    // Delay is not step-triggered - this StepPattern is used purely as
+    // a curve + Length container (its step on/off/level/pitch data is
+    // never touched) so Delay's Feedback/Tone/Drive/Wet can reuse the
+    // exact same curve storage/serialization every instrument already
+    // has (StepPattern::curves), sampled by the GLOBAL step counter
+    // over this pattern's own adjustable Length instead of a per-
+    // instrument step position - see ParamID.h's DelayParamID comment
+    // and resolveDelayParams(). A single instance, not a bank: Delay
+    // isn't recalled per Global Pattern like an instrument pattern is,
+    // its curve applies globally regardless of which section is current
+    // (only its section OVERRIDE varies per Global Pattern, same as
+    // every other instrument's override).
+    StepPattern delayPattern { numSteps };
 
     // Pattern banks: fixed size, matching StepPattern's own "always
     // allocate the max, only activeLength varies" philosophy - avoids
@@ -105,8 +123,14 @@ public:
     const StepPattern& bassPattern() const { return bassBank[(size_t) currentBassIndex.load()]; }
     StepPattern& skankPattern() { return skankBank[(size_t) currentSkankIndex.load()].steps; }
     const StepPattern& skankPattern() const { return skankBank[(size_t) currentSkankIndex.load()].steps; }
-    PointCurve& skankSawMixCurve() { return skankBank[(size_t) currentSkankIndex.load()].sawMixCurve; }
-    const PointCurve& skankSawMixCurve() const { return skankBank[(size_t) currentSkankIndex.load()].sawMixCurve; }
+    // SawMix is a fully generic curve-capable param now, like every
+    // other one - its curve lives in skankPattern().curves (keyed by
+    // SkankParamID::SawMix), resolved via the standard resolveParam
+    // (curve > override > base) exactly like Tune/Decay/Drive - see
+    // advanceStep(). No dedicated accessor needed any more; the old
+    // SkankPatternSlot::sawMixCurve field only still exists as a
+    // one-time migration source for pre-existing saves (see
+    // ProjectIO::load).
     SkankPatternSlot& skankPatternSlot() { return skankBank[(size_t) currentSkankIndex.load()]; }
     const SkankPatternSlot& skankPatternSlot() const { return skankBank[(size_t) currentSkankIndex.load()]; }
     StepPattern& snarePattern() { return snareBank[(size_t) currentSnareIndex.load()]; }
@@ -220,6 +244,12 @@ public:
         OverrideMap skankOverrides;
         OverrideMap snareOverrides;
         OverrideMap hihatOverrides;
+        // Delay has no per-Global-Pattern index (its curve isn't
+        // "recalled" like an instrument pattern is - see delayPattern's
+        // comment), but its section OVERRIDE still varies per Global
+        // Pattern exactly like every other instrument's, e.g. "this
+        // breakdown section wants Feedback pinned higher."
+        OverrideMap delayOverrides;
 
         void reset()
         {
@@ -230,6 +260,7 @@ public:
             skankOverrides.clear();
             snareOverrides.clear();
             hihatOverrides.clear();
+            delayOverrides.clear();
         }
     };
     static constexpr int globalPatternBankSize = 16;
@@ -282,6 +313,7 @@ public:
         copyOverrideMap (dst.skankOverrides, src.skankOverrides);
         copyOverrideMap (dst.snareOverrides, src.snareOverrides);
         copyOverrideMap (dst.hihatOverrides, src.hihatOverrides);
+        copyOverrideMap (dst.delayOverrides, src.delayOverrides);
     }
 
     // For "Duplicate" - finds the next slot with no saved content, or
@@ -476,6 +508,7 @@ private:
 
     void advanceStep();
     void resolveDelaySends();
+    void resolveDelayParams (float& feedbackOut, float& toneOut, float& driveOut, float& wetOut);
     double samplesPerStep() const;
     // Renders Kick/Bass/Skank/Snare/HiHat into their own scratch buffers, sums them
     // into out (the dry mix, unchanged from before), builds the

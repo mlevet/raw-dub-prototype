@@ -48,7 +48,17 @@ public:
     // signal, not the main mix. mixOut is where the wet output gets
     // ADDED (never overwritten) - almost always the same buffer the
     // instruments already rendered their dry signal into.
-    void process (float* mixOut, const float* sendInput, int numSamples);
+    //
+    // feedbackAmt/toneCutoffHz/driveAmt/wetAmt are the ALREADY-RESOLVED
+    // values for this block (curve/override/base - see AudioEngine::
+    // resolveDelayParams) - this class has no idea whether a value came
+    // from a curve, an override, or is just the feedback/toneHz/drive/
+    // wet knob passed through, same separation of concerns every synth's
+    // trigger() already has. Time is deliberately NOT resolved this way
+    // and stays read internally from timeMs - see ParamID.h's
+    // DelayParamID comment on why animating Time isn't safe yet.
+    void process (float* mixOut, const float* sendInput, int numSamples,
+                  float feedbackAmt, float toneCutoffHz, float driveAmt, float wetAmt);
     void resetToDefaults(); // for "New Project" - restores every param to its shipped default
     // Zeroes the delay line and filter state - called on New/Open
     // Project so old audio energy never lingers into a freshly loaded

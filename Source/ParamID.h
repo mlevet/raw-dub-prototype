@@ -30,9 +30,29 @@ namespace RawDub
 // was already a block-level mix-routing scalar applied entirely inside
 // AudioEngine (kickScratch[i] * kickSend), never inside the synth - only
 // WHERE that scalar comes from changed (resolved, not a raw knob read),
-// not its granularity. Delay's own 5 params (Time/Feedback/Tone/Drive/
-// Wet) still have no enum at all - it's a continuous bus effect with no
-// pattern/phrase position of its own to sample a curve against.
+// not its granularity.
+enum class DelayParamID
+{
+    Feedback,
+    Tone,
+    Drive,
+    Wet,
+    // Time is deliberately absent - DubDelay::process reads it as a
+    // plain, non-interpolated integer buffer offset (see its own
+    // comment), so changing it already causes an audible jump even from
+    // the slider; animating it via a fast-moving curve would turn that
+    // into a rhythmic glitch every step. Fixing that would mean an
+    // interpolated/crossfaded delay-line read, a separate DSP change,
+    // not something folded in silently here - Time stays a plain knob
+    // until that's actually done.
+    //
+    // Delay has no StepPattern of its own (it's not step-triggered) -
+    // AudioEngine::delayPattern is a StepPattern used purely as a curve
+    // + Length container (its step on/off/level/pitch data is never
+    // touched), sampled by the GLOBAL step counter over its own
+    // adjustable Length, the same fixed-scale-loop model every
+    // instrument's pattern already gives curves - see AudioEngine.h.
+};
 enum class BassParamID
 {
     Tune,
@@ -64,10 +84,7 @@ enum class SkankParamID
     Decay,
     Drive,
     DelaySend,
-    // SawMix is NOT here - it's already always-on/always-a-curve via its
-    // own separate mechanism (SkankPatternSlot::sawMixCurve), never a
-    // flat value, so it was never a candidate for this override-capable
-    // "flat or curved" system in the first place.
+    SawMix,
 };
 
 enum class SnareParamID
